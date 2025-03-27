@@ -20,8 +20,6 @@
       <FunctionLevelLinking>false</FunctionLevelLinking>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <Optimization>Full</Optimization>
-      <AdditionalOptions>-mavx2 -mfma
- %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <AdditionalDependencies>mkl_intel_ilp64.lib;mkl_intel_thread.lib;mkl_core.lib;libiomp5md.lib;msmpi.lib;msmpifec.lib;msmpifmc.lib;%(AdditionalDependencies)</AdditionalDependencies>

@@ -18,5 +18,40 @@
     <ClCompile Include="MLFMM.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="Octree.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="RWGpre.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="MPIpre.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="SPectrumPre.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="MatrixPre.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Octree.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="RWGpre.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="MPIpre.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="base.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="SPectrumPre.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="MatrixPre.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
