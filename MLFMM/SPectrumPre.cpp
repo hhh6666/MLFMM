@@ -37,7 +37,13 @@ void SpectrumPre::Get_Spectrum()
 
 		int spectrum_theta_st = upper_bound(thetas_level.begin(), thetas_level.end(), theta_st) - thetas_level.begin();
 		int spectrum_theta_end = upper_bound(thetas_level.begin(), thetas_level.end(), theta_end) - thetas_level.begin();
-
+		weights_level.reserve((spectrum_theta_end - spectrum_theta_st) * phi_num);
+		for (int j = spectrum_theta_st; j < spectrum_theta_end; j++) {
+			for (int k = 0; k < phi_num; k++) {
+				weights_level.push_back(LP.weight(theta_num - j) * phi_dif);
+			}
+		}
+		weights.push_back(weights_level);
 		thetas_num.push_back(theta_num);
 		phis_num.push_back(phi_num);
 		sptm_thetas_st.push_back(spectrum_theta_st);
@@ -51,27 +57,22 @@ void SpectrumPre::Get_Spectrum()
 
 			ip_thetas_st.push_back(interpolation_theta_st);
 			ip_thetas_end.push_back(interpolation_theta_end);
-
-			weights_level.reserve((interpolation_theta_end - interpolation_theta_st) * phi_num);
+			
 			k_unit.reserve((interpolation_theta_end - interpolation_theta_st) * phi_num);
 			for (int j = interpolation_theta_st; j < interpolation_theta_end; j++) {
 				for (int k = 0; k < phi_num; k++) {
-					weights_level.push_back(LP.weight(theta_num - j) * phi_dif);
 					k_unit.push_back(GetK(thetas_level[j], k * phi_dif, wavenumber));
 				}
 			}
 		}
 		else {
-			weights_level.reserve(theta_num * phi_num);
 			k_unit.reserve(theta_num * phi_num);
 			for (int j = 0; j < theta_num; j++) {
 				for (int k = 0; k < phi_num; k++) {
-					weights_level.push_back(LP.weight(theta_num - j) * phi_dif);
 					k_unit.push_back(GetK(thetas_level[j], k * phi_dif, wavenumber));
 				}
 			}
 		}
-		weights.push_back(weights_level);
 		k_vecs.push_back(k_unit);
 		//cout << i << "ÊıÁ¿ " << k_unit.size() << endl;
 	}

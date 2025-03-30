@@ -64,14 +64,12 @@ public:
 
 class SpectrumPre
 {
-	std::vector<MPI_Request> requests_up;//4xlevel_num
-	std::vector<MPI_Request> requests_down;//4xlevel_num
 	const MPIpre& mpipre;
 	void Get_Spectrum();
 public:
 	SpectrumPre() = default;
-	SpectrumPre(int level_num, float length, float wavenumber, const MPIpre& mpipre)
-		:level_num(level_num), length(length), wavenumber(wavenumber), mpipre(mpipre)
+	SpectrumPre(int level_num, float length, float freq, const MPIpre& mpipre)
+		:level_num(level_num), length(length), wavenumber(2.0 * pi * freq / c0), mpipre(mpipre)
 	{
 		this->Get_Spectrum();
 	}
@@ -80,7 +78,7 @@ public:
 	std::vector<std::vector<float> > thetas;
 	std::vector<std::vector<float>> weights;
 	float length;
-	float wavenumber;
+	float freq, wavenumber;
 	const int level_num;
 	const int GetTopLevelNum() const { return level_num - 2; }
 	std::vector<int> thetas_num, phis_num;
@@ -89,23 +87,6 @@ public:
 	std::vector<int> ip_thetas_end;
 	std::vector<int> ip_thetas_st;
 	const int GetSpectrumNumLevel(int level) {return k_vecs[level].size(); }
-	long long unsigned int mem_size = 0;
-	CP* mem_st = nullptr;
-	CP* mem_end = nullptr;
-	CP* mem_available = nullptr;
-	CP* mem_change_ava(int size) {
-		if ((mem_end - mem_available) < size + 2) mem_available = mem_st;
-		mem_available += size;
-		return mem_available - size;
-	}
-	CP* temp_mem = nullptr;
-	void clear_mem() {
-		if (mem_st != nullptr) delete[] mem_st, mem_st = nullptr;
-		if (temp_mem != nullptr) delete[] temp_mem, temp_mem = nullptr;
-		mem_size = 0;
-		mem_available = nullptr;
-		mem_end = nullptr;
-	}
 
 };
 

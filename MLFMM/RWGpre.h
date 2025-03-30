@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <iomanip>
+#include "base.h"
 
 const int GLPN = 3;//高斯勒让德点数
 const int GLPN2 = GLPN * 2;
@@ -35,15 +36,15 @@ struct RWG
 	std::vector<float> tri_area;//三角形面积
 
 	RWG& ReadNas(std::string filename, int triangle_num);
-	RWG& initial();
-	std::complex<float> GetZij(int i, int j);
+	RWG& initial(float freq);
+	CP GetZij(int i, int j);
 	Eigen::Vector3f start_point{ 1e9,1e9,1e9 }, end_point{ -1e9,-1e9,-1e9 };
 	Eigen::Vector3f GetEdgeCenter(int index);
 
 private:
-	
+	float lam, k0, gap;
 	float TriDistence(int i, int j);
-	
+	const float eps = 0.04;
 	Eigen::Vector4f GetI1I2(Eigen::Vector3f r, int tri_index);
 	Eigen::Vector2i GetEdgeVertex(int edge_index);
 };

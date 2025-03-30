@@ -7,13 +7,7 @@
 using namespace std;
 using namespace Eigen;
 
-struct Parameters
-{
-    float freq;
-    float lam;
-    float waveNumber;
-    Parameters(float freq) :freq(freq), lam(c0 / freq), waveNumber(2 * pi / lam) {}
-};
+
 
 void temp()
 {

@@ -250,25 +250,25 @@ void OctreeRWG::Fillcubes()
 	for (int i = 0; i < level_num - 1; i++) {
 		if (i == 0) {
 			unordered_map<size_t, int> near;
-			near_proxy_cubes.reserve(cubes[i].size());
+			near_cubes.reserve(cubes[i].size());
 			for (int j =0; j < cubes[i].size(); j++) {
 				std::vector<size_t> near_neighbor = GetNearNeighbor(cubes[i][j].mtc, childs_num[i]);
 				for (auto& mtc_nb : near_neighbor) {
 					if (near[mtc_nb] != 0) {
-						near_proxy_cubes[near[mtc_nb] - 1].local_index.push_back(j);
+						near_cubes[near[mtc_nb] - 1].local_index.push_back(j);
 					}
 					else {
 						NearProxyCube near_proxy_cube;
 						near_proxy_cube.mtc = mtc_nb;
-						near_proxy_cube.local_index.reserve(10);
+						near_proxy_cube.local_index.reserve(8);
 						near_proxy_cube.local_index.push_back(j);
-						near_proxy_cubes.push_back(near_proxy_cube);
-						near[mtc_nb] = near_proxy_cubes.size();
+						near_cubes.push_back(near_proxy_cube);
+						near[mtc_nb] = near_cubes.size();
 					}
 
 				}
 			}
-			near_proxy_cubes.shrink_to_fit();
+			near_cubes.shrink_to_fit();
 		}
 		vector<ProxyCube> proxy_cubes_level;
 		proxy_cubes_level.reserve(cubes[i].size());
@@ -276,11 +276,11 @@ void OctreeRWG::Fillcubes()
 		for (int j = 0; j < cubes[i].size(); j++) {
 			size_t mtc = cubes[i][j].mtc;
 			std::vector<size_t> far_neighbor = GetNearNeighbor(cubes[i][j].mtc, childs_num[i]);
-			for (auto& mtc_nb : far_neighbor) {
+			/*for (auto& mtc_nb : far_neighbor) {
 				if (mortoncode3d.GetGap2(mtc_nb , cubes[i][j].mtc, i).norm() > mortoncode3d.next_near_length_max[i]) {
 					cout << mpipre.GetRank() << " error " << i << " " << j << endl;
 				}
-			}
+			}*/
 			for (auto& mtc_nb : far_neighbor) {
 				if (next_near[mtc_nb] != 0) {
 					proxy_cubes_level[next_near[mtc_nb] - 1].local_index.push_back(j);
@@ -288,7 +288,7 @@ void OctreeRWG::Fillcubes()
 				else {
 					ProxyCube proxy_cube;
 					proxy_cube.mtc = mtc_nb;
-					proxy_cube.local_index.reserve(10);
+					proxy_cube.local_index.reserve(16);
 					proxy_cube.local_index.push_back(j);
 					proxy_cubes_level.push_back(proxy_cube);
 					next_near[mtc_nb] = proxy_cubes_level.size();
@@ -348,6 +348,7 @@ void OctreeRWG::Greedy(std::vector<Cube>& cubes_level, std::vector<CubeWieght>& 
 void OctreeRWG::GetNear()
 {
 	local_cubes_sent.reserve(mpipre.Get_HSP_end());
+	far_cubes_process_index.reserve(mpipre.Get_HSP_end());
 	for (int i = 0; i < mpipre.Get_HSP_end(); i++) {
 		cout << mpipre.GetRank() << " 开始发送" << i << endl;
 		vector<size_t> mtc_send(cubes[i].size());
@@ -370,7 +371,7 @@ void OctreeRWG::GetNear()
 			mtc_recv.data(), cubes_num_process.data(), displs.data(), MPI_UNSIGNED_LONG_LONG, MPI_COMM_WORLD);
 		//近邻盒子
 		if (i == 0) {
-			for (auto& near_nb : near_proxy_cubes) {
+			for (auto& near_nb : near_cubes) {
 				for (int j = 0; j < mpipre.GetSize(); j++) {
 					auto st = mtc_recv.begin() + displs[j];
 					auto ed = st + cubes_num_process[j];
@@ -382,17 +383,22 @@ void OctreeRWG::GetNear()
 				}
 			}
 			//cout << mpipre.GetRank() << " ?? " << endl;
-			std::sort(near_proxy_cubes.begin(), near_proxy_cubes.end(), [](const NearProxyCube& a, const NearProxyCube& b) {
+			std::sort(near_cubes.begin(), near_cubes.end(), [](const NearProxyCube& a, const NearProxyCube& b) {
 				return a.process_index == b.process_index ? a.mtc < b.mtc : a.process_index < b.process_index;
 				}
 			);
+			near_cubes_process_index.resize(mpipre.GetRank(), 0);
+			for (int j = 0; j < mpipre.GetRank() - 1; ++j) {
+				near_cubes_process_index[j + 1] = near_cubes_process_index[j];
+				while(near_cubes[near_cubes_process_index[j + 1]].process_index == j) ++near_cubes_process_index[j + 1];
+			}
 			near_cubes_sent.resize(mpipre.GetSize());
 			int index = 0;
 			for (int j = 0; j < mpipre.GetSize(); j++) {
 				set<int> cube_be_sent;
 				//cout << mpipre.GetRank() << "  " << j << " " << near_proxy_cubes[0].process_index << endl;
-				while (index < near_proxy_cubes.size() && near_proxy_cubes[index].process_index == j) {
-					for (auto& local_index : near_proxy_cubes[index].local_index) cube_be_sent.insert(local_index);
+				while (index < near_cubes.size() && near_cubes[index].process_index == j) {
+					for (auto& local_index : near_cubes[index].local_index) cube_be_sent.insert(local_index);
 					index++;
 					//if (mpipre.GetRank() == 0) cout << index << " " << near_proxy_cubes[index].process_index << " " << near_proxy_cubes.size() << endl;
 				}
@@ -402,14 +408,17 @@ void OctreeRWG::GetNear()
 		//cout<< mpipre.GetRank() << " ??? " << endl;
 		//确定每一个代理盒子所属进程
 		auto& transfer_process = mpipre.GetTransferProcess(i);
+		std::vector<int> far_cube_recv_num(transfer_process.size(), 0);
 		for (auto& proxy_cube : proxy_cubes[i]) {
-			for (auto& j : transfer_process) {
-				auto st = mtc_recv.begin() + displs[j];
-				auto ed = st + cubes_num_process[j];
+			for (int j = 0;j<transfer_process.size();j++) {
+				int process_index = transfer_process[j];
+				auto st = mtc_recv.begin() + displs[process_index];
+				auto ed = st + cubes_num_process[process_index];
 				int m0 = lower_bound(st, ed, proxy_cube.mtc) - mtc_recv.begin();
 				if (m0 < all_cubes_num && mtc_recv[m0] == proxy_cube.mtc) {
 					//proxy_cube.my_index = m0 - displs[j];
-					proxy_cube.process_index = j;
+					proxy_cube.process_index = process_index;
+					++far_cube_recv_num[j];
 					break;
 				}
 			}
@@ -419,6 +428,12 @@ void OctreeRWG::GetNear()
 			return a.process_index == b.process_index ? a.mtc < b.mtc : a.process_index < b.process_index;
 			}
 		);
+		vector<int> far_cubes_process(transfer_process.size(), 0);
+		for (int j = 0; j < transfer_process.size() - 1; ++j) {
+			far_cubes_process[j + 1] = far_cubes_process[j];
+			while (proxy_cubes[i][far_cubes_process[j + 1]].process_index == j) ++far_cubes_process[j + 1];
+		}
+		far_cubes_process_index.push_back(far_cubes_process);
 		//cout << mpipre.GetRank() << " ????? " << endl;
 		//确定需要发送到第j个进程的本地盒子序号
 		std::vector<std::vector<int> > cubes_sent_level(transfer_process.size());
@@ -440,8 +455,9 @@ void OctreeRWG::change_rwgs()
 	auto& old_rwgs = *old_rwg_ptr;
 	int edges_num = old_rwgs.edges.size();
 	cube_rwgs_num.resize(cubes[0].size(), 0);
-	int sum = 0;
-	vector<vector<int>> cube_rwgs_index(cubes[0].size());
+	near_cube_rwgs_num.resize(near_cubes.size(), 0);
+	int sum1 = 0, sum2 = 0;
+	vector<vector<int>> cube_rwgs_index(cubes[0].size()+ near_cubes.size());
 	//cout << mpipre.GetRank() << " ?" << endl;
 	for (int i = 0; i < edges_num; i++) {
 		const Vector3f& point = old_rwg_ptr->GetEdgeCenter(i);
@@ -451,13 +467,33 @@ void OctreeRWG::change_rwgs()
 		if (m0 < cubes[0].size() && mtc == cubes[0][m0].mtc) {
 			cube_rwgs_index[m0].push_back(i);
 			++cube_rwgs_num[m0];
-			++sum;
+			++sum1;
+		}
+		int m1 = lower_bound(near_cubes.begin(), near_cubes.end(), mtc,[](const NearProxyCube& a, size_t b){
+			return a.mtc < b; }) - near_cubes.begin();
+		if ( m1 < near_cubes.size() && mtc == near_cubes[m1].mtc) {
+			if (near_cubes[m1].process_index != mpipre.GetRank()) {
+				cube_rwgs_index[cubes[0].size() + m1].push_back(i);
+				++sum2;
+			}
+			++near_cube_rwgs_num[m1];
 		}
 	}
-	cout<<mpipre.GetRank()<<" rwg分配给本地盒子 "<< sum <<endl;
-	rwg.edges.reserve(edges_num / mpipre.GetSize() + 50);
-	rwg.points.reserve(edges_num / mpipre.GetSize() / 3 + 50);
-	rwg.triangles.reserve(edges_num / mpipre.GetSize() / 1.5 + 50);
+	cube_rwgs_dif.resize(cubes[0].size());
+	for (int i = 0; i < cubes[0].size(); i++) {
+		cube_rwgs_dif[i] = i == 0 ? 0 : cube_rwgs_dif[i - 1] + cube_rwgs_num[i - 1];
+	}
+	near_cubes_recv_num.resize(mpipre.GetRank(), 0);
+	int near_cubes_index = 0;
+	for (int i = 0; i < mpipre.GetRank(); i++) {
+		while (near_cubes[near_cubes_index].process_index == i) {
+			near_cubes_recv_num[i] += near_cube_rwgs_num[near_cubes_index++];
+		}
+	}
+	cout << mpipre.GetRank() << " rwg分配给本地盒子 " << sum1 << " " << sum2 << endl;
+	rwg.edges.reserve(sum1 + sum2);
+	rwg.points.reserve((sum1 + sum2) / 3);
+	rwg.triangles.reserve((sum1 + sum2) / 1.5);
 	unordered_map<int, int> point_map{};
 	unordered_map<int, int> triangle_map{};
 
@@ -492,6 +528,5 @@ void OctreeRWG::change_rwgs()
 	//if (mpipre.GetRank() == 0) cout<<mpipre.GetRank() << "rwg重分配完成" << endl;
 	cout << mpipre.GetRank() << "rwg重分配完成" << endl;
 	//cout << "rwg重分配完成" << mpipre.GetRank() << " " << rwgs.size() << endl;
-	rwg.initial();
 	//cubes_sort();
 }

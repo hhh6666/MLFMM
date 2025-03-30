@@ -27,6 +27,9 @@ void MPIpre::GetProcessOrder()
 				comm_obj.rank_up = process[level_num][rank - 1];
 			}
 			HSP_com.push_back(comm_obj);
+
+			plane_wave_now[0] = rank;
+			transfers_index.push_back(plane_wave_now);
 		}
 		else {
 			int rank_index = 0;//进程在当前总进程组的索引
@@ -54,7 +57,8 @@ void MPIpre::GetProcessOrder()
 				plane_wave_now[i] = b + i * cluster_size;
 			}
 			sort(plane_wave_now.begin(), plane_wave_now.end());
-			plane_wave_index.push_back(plane_wave_now);
+			transfers_index.push_back(plane_wave_now);
+
 			if (BP_size > 1 && cluster_size == BP_size) {
 				BP_com.reserve(cluster_size);
 				for (int i = 0; i < cluster_size; i++) {

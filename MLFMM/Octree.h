@@ -13,10 +13,9 @@
 struct NearProxyCube
 {
 	size_t mtc;
-	int process_index;//所在进程编号
+	int process_index = -1;//所在进程编号
 	std::vector<int> local_index;//波谱发送到本地进程后，确认其近邻在本地盒子的起始位置
-	std::complex<float>* x = nullptr;
-	std::vector<short> near_matrix_index;
+	std::vector<int> index;
 };
 
 struct ProxyCube
@@ -25,9 +24,7 @@ struct ProxyCube
 	int process_index= -1;//所在进程编号
 	//int my_index;//代理盒子在其他进程的位置
 	std::vector<int> local_index;
-	std::vector<short> transfers_index;
-	std::complex<float>* sptmtheta = nullptr;
-	std::complex<float>* sptmphi = nullptr;
+	std::vector<int> index;
 
 };
 
@@ -46,12 +43,10 @@ inline size_t Part1By2(size_t code)
 struct Cube
 {
 	size_t mtc;
-	int start, num;
 	/*std::complex<float>* sptmtheta = nullptr;
 	std::complex<float>* sptmphi = nullptr;*/
 	std::complex<float>* sptmtheta = nullptr;
 	std::complex<float>* sptmphi = nullptr;
-	std::vector<int> proxys; //从代理盒子转移过来
 };
 
 struct CubeWieght
@@ -118,9 +113,7 @@ class OctreeRWG
 protected:
 	std::vector<std::vector<Cube> > cubes;//本地盒子
 	std::vector<std::vector<ProxyCube> > proxy_cubes;//代理盒子（用于次近邻）
-	std::vector<NearProxyCube> near_proxy_cubes;//代理盒子（用于近邻）
-	std::vector<std::vector<std::vector<int>> > local_cubes_sent;
-	std::vector<std::vector<int>> near_cubes_sent;
+	
 	RWG* old_rwg_ptr = nullptr;
 	MPIpre& mpipre;
 	void Fillcubes();
@@ -140,13 +133,19 @@ public:
 		this->GetNear();
 	};
 	MortonCode3D mortoncode3d;
-	const std::vector<std::vector<Cube> >& getCubes() const { return cubes; }
 	std::vector<Cube>& GetCubesLevel(int level_index) { return cubes[level_index]; }
 	std::vector<ProxyCube>& GetProxyCubesLevel(int level_index) { return proxy_cubes[level_index]; }
-	std::vector<std::vector<int>>& GetLocalCubesSent(int level_index) { return local_cubes_sent[level_index]; }
-	const int cubes_level_num() const { return cubes.size(); }
 	RWG rwg;
 	std::vector<int> cube_rwgs_num;
+	std::vector<int> cube_rwgs_dif;
+	std::vector<int> near_cube_rwgs_num;
+	std::vector<int> near_cubes_process_index;//记录近代理盒子每一个进程的起始位置
+	std::vector<int> near_cubes_recv_num;
+	std::vector<std::vector<int>> far_cubes_process_index;//记录远代理盒子每一个进程的起始位置
+	std::vector<std::vector<std::vector<int>> > local_cubes_sent;
+	std::vector<NearProxyCube> near_cubes;//代理盒子（用于近邻）
+	std::vector<std::vector<int>> near_cubes_sent;
+	std::vector<std::vector<int>> far_cubes_recv_num;
 };
 
 

@@ -127,7 +127,7 @@ Eigen::Vector3f RWG::GetEdgeCenter(int edge_index)
 	}
 }
 
-RWG& RWG::initial()
+RWG& RWG::initial(float freq)
 {
 	Matrix<float, 3, 3> l;
 	Matrix<float, 3, 3> u;
@@ -166,6 +166,9 @@ RWG& RWG::initial()
 		J_GL.push_back(g);
 		vertex_edges.push_back(GetEdgeVertex(i));
 	}
+	lam = c0 / freq;
+	k0 = 2.0 * pi / lam;
+	gap = eps * lam;
 	//cout << "size" << J_GL.size() << " " << vertex_edges.size() << endl;
 	//cout << "初始化完成" << endl;
 	return *this;
@@ -192,4 +195,47 @@ Eigen::Vector4f RWG::GetI1I2(Eigen::Vector3f r, int tri_index)
 	}
 	ans.head(3) *= 0.5;
 	return ans;
+}
+
+std::complex<float> RWG::GetZij(int i, int j)
+{
+	CP C1 = Zf * k0 * 0.25f * cpdj;
+	CP C2 = Zf / k0 * cpdj;
+	Eigen::Matrix<float, 3, 6>& Ji = J_GL[i];
+	Eigen::Matrix<float, 3, 6>& Jj = J_GL[j];
+	CP Zij = CP(0.0, 0.0);
+	for (int m = 0; m < 2; ++m) {
+		float pmm = m ? -1.0 : 1.0;
+		for (int n = 0; n < 2; ++n) {
+			float pmn = n ? -1.0 : 1.0;
+			float Rij = TriDistence(edges[i][m], edges[j][n]);
+			float pm = m == n ? 1.0 : -1.0;
+			for (int p = 0; p < GLPN; ++p) {
+				//if (Rij < lam * 0.03) cout << "Zij=" << Zij << " "<<m<<" "<<n<<endl;
+				if (Rij < gap) {
+					//cout << i << " " << j << endl;
+					Vector3f Jm = pmm * (Ji.col(m * 3 + p) - points[vertex_edges[i][m]]);
+					Vector4f I1I2 = GetI1I2(Ji.col(m * 3 + p), edges[j][n]);
+					Vector3cf a = C1 * Jm * pmn;
+					CP b = -pm * C2 + pmn * C1 * Jm.dot(Ji.col(m * 3 + p) - points[vertex_edges[j][n]]);
+					Zij += GL_points[p][0] * (I1I2.head(3).dot(a) + b * I1I2[3]) / tri_area[edges[j][n]];
+					//cout << "Zij=" << Zij << " "<< I1I2.transpose()<< endl;
+				}
+				//cout << i << "  " << j << endl;
+				for (int q = 0; q < GLPN; ++q) {
+					Vector3f Jm = pmm * (Ji.col(m * 3 + p) - points[vertex_edges[i][m]]);
+					Vector3f Jn = pmn * (Jj.col(n * 3 + q) - points[vertex_edges[j][n]]);
+					float Rpq = (Ji.col(m * 3 + p) - Jj.col(n * 3 + q)).norm();
+					float ct = cos(-Rpq * k0), st = sin(-Rpq * k0);
+					CP G = Rij < lam * 0.03 ? CP(-0.5 * k0 * k0 * Rpq, k0 * k0 * k0 * Rpq * Rpq / 6.0 - k0)
+						: CP(ct, st) / Rpq;
+					Zij += GL_points[p][0] * GL_points[q][0] * (C1 * Jm.dot(Jn) - pm * C2) * G;
+					//if (i == j) cout << Zij << "  " << m << "  " << n << " " << G << " "<< Rpq<<endl;
+				}
+
+			}
+		}
+	}
+	Zij *= edges_length[i] * edges_length[j] / (4.0 * pi);
+	return Zij;
 }

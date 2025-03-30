@@ -20,7 +20,7 @@ class MPIpre
 	int BP_size = 1;
 	std::vector<int> process_num;//当前层进程组数量
 	std::vector<int> process_index;//本地进程在每一层进程组的位置
-	std::vector<std::vector<int>> plane_wave_index; //每一个HSP层和本地进程存相同平面波进程的索引
+	std::vector<std::vector<int>> transfers_index; //每一个HSP层和本地进程存相同平面波进程的索引
 	std::vector<CommObj> HSP_com;
 	std::vector<int> BP_com;
 public:
@@ -72,7 +72,8 @@ public:
 	}
 	int GetRankExchange(int level_index) const {return HSP_com[HSP_end - level_index].rank_exchange;}
 	std::vector<int>& GetTransferProcess(int level_index) { 
-		return level_index <= BP_end ? plane_wave_index[plane_wave_index.size() - 1] : plane_wave_index[HSP_end - level_index - 1];
+		if (level_index >= HSP_end) return transfers_index[0];
+		return level_index <= BP_end ? transfers_index[transfers_index.size() - 1] : transfers_index[HSP_end - level_index];
 	}
 	int GetSize()const{return size;}
 	int GetRank()const{return rank;}
