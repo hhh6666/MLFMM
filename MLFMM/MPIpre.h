@@ -15,7 +15,7 @@ class MPIpre
 {
 	int rank = 0;
 	int size = 1;
-	int BP_end = 0;
+	int BP_end = 1;
 	int HSP_end = BP_end;
 	int BP_size = 1;
 	std::vector<int> process_num;//当前层进程组数量

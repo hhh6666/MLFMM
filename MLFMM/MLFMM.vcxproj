@@ -130,19 +130,21 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="MatrixPre.cpp" />
+    <ClCompile Include="main.cpp" />
     <ClCompile Include="MLFMM.cpp" />
     <ClCompile Include="MPIpre.cpp" />
     <ClCompile Include="Octree.cpp" />
     <ClCompile Include="RWGpre.cpp" />
-    <ClCompile Include="SPectrumPre.cpp" />
+    <ClCompile Include="SpectrumPre.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="base.h" />
     <ClInclude Include="MatrixPre.h" />
+    <ClInclude Include="MLFMM.h" />
     <ClInclude Include="MPIpre.h" />
     <ClInclude Include="Octree.h" />
     <ClInclude Include="RWGpre.h" />
-    <ClInclude Include="SPectrumPre.h" />
+    <ClInclude Include="SpectrumPre.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -15,7 +15,7 @@ struct NearProxyCube
 	size_t mtc;
 	int process_index = -1;//所在进程编号
 	std::vector<int> local_index;//波谱发送到本地进程后，确认其近邻在本地盒子的起始位置
-	std::vector<int> index;
+	std::vector<int> index;//关联矩阵的索引
 };
 
 struct ProxyCube
@@ -43,10 +43,7 @@ inline size_t Part1By2(size_t code)
 struct Cube
 {
 	size_t mtc;
-	/*std::complex<float>* sptmtheta = nullptr;
-	std::complex<float>* sptmphi = nullptr;*/
-	std::complex<float>* sptmtheta = nullptr;
-	std::complex<float>* sptmphi = nullptr;
+	CP* sptmtheta = nullptr;
 };
 
 struct CubeWieght
@@ -57,22 +54,22 @@ struct CubeWieght
 
 struct MortonCode1D
 {
-	float start_point;
-	float end_point;
-	float length;
+	JD start_point;
+	JD end_point;
+	JD length;
 	int level_num;
-	MortonCode1D& set_start_point(float start_point, float end_point) { this->start_point = start_point; this->end_point = end_point; return *this; }
-	MortonCode1D& set_length(float length) { this->length = length; return *this; }
-	size_t GetMortonCode(const float& point) const;
+	MortonCode1D& set_start_point(JD start_point, JD end_point) { this->start_point = start_point; this->end_point = end_point; return *this; }
+	MortonCode1D& set_length(JD length) { this->length = length; return *this; }
+	size_t GetMortonCode(const JD& point) const;
 };
 
 class MortonCode3D
 {
 	MortonCode1D mortoncode1d[3];
 	
-	Eigen::Vector3f centre;
+	VecJD3 centre;
 	int level_num = 1;
-	int get_level_num(float floor_cube_length, float cube_length) {
+	int get_level_num(JD floor_cube_length, JD cube_length) {
 		int level = 0;
 		while ((1 << level) * floor_cube_length < cube_length) {
 			++level;
@@ -82,13 +79,19 @@ class MortonCode3D
 	}
 public:
 	MortonCode3D() = default;
-	MortonCode3D(Eigen::Vector3f start_point, Eigen::Vector3f end_point, float length) {
+	MortonCode3D(VecJD3 start_point, VecJD3 end_point, JD length) {
+		this->centre = (start_point + end_point) / 2;
+		int a = get_level_num(length, (end_point - start_point)[0]);
+		int b = get_level_num(length, (end_point - start_point)[1]);
+		int c = get_level_num(length, (end_point - start_point)[2]);
+		mortoncode1d[0].level_num = a;
+		mortoncode1d[1].level_num = b;
+		mortoncode1d[2].level_num = c;
+		start_point = centre - (VecJD3{ JD(1 << a),JD(1 << b),JD(1 << c) } *length) / 2;
+		end_point = centre + (VecJD3{ JD(1 << a),JD(1 << b),JD(1 << c) } *length) / 2;
 		mortoncode1d[0].set_length(length).set_start_point(start_point[0], end_point[0]);
 		mortoncode1d[1].set_length(length).set_start_point(start_point[1], end_point[1]);
 		mortoncode1d[2].set_length(length).set_start_point(start_point[2], end_point[2]);
-		mortoncode1d[0].level_num = get_level_num(length, end_point[0] - start_point[0]);
-		mortoncode1d[1].level_num = get_level_num(length, end_point[1] - start_point[1]);
-		mortoncode1d[2].level_num = get_level_num(length, end_point[2] - start_point[2]);
 		near_length_max.resize(level_num);
 		next_near_length_max.resize(level_num);
 		for (int i = 0; i < level_num; ++i) {
@@ -96,12 +99,12 @@ public:
 			next_near_length_max[i] = 3.0 * length * (1 << i) * sqrt(3.0) + 1e-6;
 		}
 	}
-	std::vector<float> near_length_max;
-	std::vector<float> next_near_length_max;
-	Eigen::Vector3f GetPoint(size_t morton_code, int level_index) const;
-	Eigen::Vector3f GetGap(size_t morton_code_gap, int level_index) const;
-	Eigen::Vector3f GetGap2(size_t mtc1, size_t mtc2, int level_index) const;
-	size_t GetMortonCode(const Eigen::Vector3f& point) const;
+	std::vector<JD> near_length_max;
+	std::vector<JD> next_near_length_max;
+	VecJD3 GetPoint(size_t morton_code, int level_index) const;
+	VecJD3 GetGap(size_t morton_code_gap, int level_index) const;
+	VecJD3 GetGap2(size_t mtc1, size_t mtc2, int level_index) const;
+	size_t GetMortonCode(const VecJD3& point) const;
 	const int& GetLevelNum() const { return level_num; }
 	
 };
@@ -125,26 +128,29 @@ protected:
 
 public:
 	OctreeRWG() = default;
-	OctreeRWG(RWG* old_rwg_ptr, float length, MPIpre& mpipre)
+	OctreeRWG(RWG* old_rwg_ptr, JD length, MPIpre& mpipre)
 		:old_rwg_ptr(old_rwg_ptr), mortoncode3d(old_rwg_ptr->start_point, old_rwg_ptr->end_point, length), mpipre(mpipre)
 	{
 		this->Fillcubes();
-		this->change_rwgs();
 		this->GetNear();
+		this->change_rwgs();
+		rwg.initial();
 	};
 	MortonCode3D mortoncode3d;
 	std::vector<Cube>& GetCubesLevel(int level_index) { return cubes[level_index]; }
 	std::vector<ProxyCube>& GetProxyCubesLevel(int level_index) { return proxy_cubes[level_index]; }
 	RWG rwg;
+	VecCP b;
+	void Fillb(JD theta, JD phi);
 	std::vector<int> cube_rwgs_num;
-	std::vector<int> cube_rwgs_dif;
-	std::vector<int> near_cube_rwgs_num;
-	std::vector<int> near_cubes_process_index;//记录近代理盒子每一个进程的起始位置
+	std::vector<int> cube_rwgs_dif;//所有盒子（包括本地和代理盒子）的相对位置，代理盒子再在本地盒子后面
+	std::vector<int> near_cube_rwgs_num;//每一个近代理中的基函数个数
+	std::vector<int> near_cubes_process_index;//记录每一个进程对应的进代理盒子的起始位置
 	std::vector<int> near_cubes_recv_num;
 	std::vector<std::vector<int>> far_cubes_process_index;//记录远代理盒子每一个进程的起始位置
 	std::vector<std::vector<std::vector<int>> > local_cubes_sent;
 	std::vector<NearProxyCube> near_cubes;//代理盒子（用于近邻）
-	std::vector<std::vector<int>> near_cubes_sent;
+	std::vector<std::vector<int>> near_cubes_sent;//需要给第j个进程发送的本地盒子编号
 	std::vector<std::vector<int>> far_cubes_recv_num;
 };
 

@@ -12,22 +12,22 @@
 #include"MPIpre.h"
 #include"base.h"
 
-typedef Eigen::Triplet<float> T_;
+typedef Eigen::Triplet<JD> T_;
 
 inline int GetThetaNum(int L) { return L + 1; }
 inline int GetPhiNum(int L) { return (2 * L + 2) % 4 ? (2 * L + 4) : (2 * L + 2); }
-inline Eigen::Vector3f GetK(float theta, float phi, float wavenumber) {
-	float ct = cos(theta);
-	float st = sin(theta);
-	float cp = cos(phi);
-	float sp = sin(phi);
-	return wavenumber * Eigen::Vector3f{ st * cp, st * sp, ct };
+inline VecJD3 GetK(JD theta, JD phi, JD wavenumber) {
+	JD ct = cos(theta);
+	JD st = sin(theta);
+	JD cp = cos(phi);
+	JD sp = sin(phi);
+	return wavenumber * VecJD3{ st * cp, st * sp, ct };
 }
 
 class TWIP
 {
-	std::vector<float>& fa_thetas;
-	std::vector<float>& son_thetas;
+	std::vector<JD>& fa_thetas;
+	std::vector<JD>& son_thetas;
 	int fa_phi_num, son_phi_num;
 	
 	int GetThetaIndex(int theta_index) {
@@ -44,22 +44,22 @@ class TWIP
 		return GetThetaIndex(theta_index) * son_phi_num + phi_index;
 
 	}
-	float IsVirtual(int theta_index) {
+	JD IsVirtual(int theta_index) {
 		if (theta_index < 0 || theta_index >= son_thetas.size()) return -1.0;
 		return 1.0;
 	}
-	float GetTheta(int theta_index) {
+	JD GetTheta(int theta_index) {
 		if (theta_index < 0) return -son_thetas[GetThetaIndex(theta_index)];
 		else if (theta_index >= son_thetas.size()) return 2.0 * pi - son_thetas[GetThetaIndex(theta_index)];
 		else return son_thetas[theta_index];
 	}
 public:
-	static const int p = 2;
-	static const int pp = 4;
-	TWIP(std::vector<float>& fa_thetas, std::vector<float>& son_thetas, int fa_phi_num, int son_phi_num) :
+	static const int p = 3;
+	static const int pp = 5;
+	TWIP(std::vector<JD>& fa_thetas, std::vector<JD>& son_thetas, int fa_phi_num, int son_phi_num) :
 		fa_thetas(fa_thetas), son_thetas(son_thetas), fa_phi_num(fa_phi_num), son_phi_num(son_phi_num) {}
 	void GetMatrix(int fa_theta_st,int fa_theta_end,int son_theta_st,int son_theta_end);
-	Eigen::SparseMatrix<float, Eigen::RowMajor> First, Second;
+	Eigen::SparseMatrix<JD, Eigen::RowMajor> First, Second;
 };
 
 class SpectrumPre
@@ -68,17 +68,16 @@ class SpectrumPre
 	void Get_Spectrum();
 public:
 	SpectrumPre() = default;
-	SpectrumPre(int level_num, float length, float freq, const MPIpre& mpipre)
-		:level_num(level_num), length(length), wavenumber(2.0 * pi * freq / c0), mpipre(mpipre)
+	SpectrumPre(int level_num, JD length, const MPIpre& mpipre)
+		:level_num(level_num), length(length), mpipre(mpipre)
 	{
 		this->Get_Spectrum();
 	}
-	std::vector<Eigen::Matrix<float, 2, 3>> TCtoS;
-	std::vector<std::vector<Eigen::Vector3f>> k_vecs;
-	std::vector<std::vector<float> > thetas;
-	std::vector<std::vector<float>> weights;
-	float length;
-	float freq, wavenumber;
+	std::vector<Eigen::Matrix<JD, 2, 3>> TCtoS;
+	std::vector<std::vector<VecJD3>> k_vecs;
+	std::vector<std::vector<JD> > thetas;
+	std::vector<std::vector<JD>> weights;
+	JD length;
 	const int level_num;
 	const int GetTopLevelNum() const { return level_num - 2; }
 	std::vector<int> thetas_num, phis_num;
@@ -86,7 +85,7 @@ public:
 	std::vector<int> sptm_thetas_st;
 	std::vector<int> ip_thetas_end;
 	std::vector<int> ip_thetas_st;
-	const int GetSpectrumNumLevel(int level) {return k_vecs[level].size(); }
+	const int GetSptmNumLevel(int level) {return k_vecs[level].size(); }
 
 };
 
