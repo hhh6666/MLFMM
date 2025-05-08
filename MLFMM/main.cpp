@@ -15,7 +15,7 @@ void temp()
    /* string nas_filename = "feko/ermianjiao/32lam/hh132492.nas";
     const int rwgs_num = 132492;
     const JD fines_length = 0.235 * GlobalParams.lam;*/
-    /*string nas_filename = "feko/sphere/1094.nas";
+   /* string nas_filename = "feko/sphere/1094.nas";
     const int rwgs_num = 1094;
     const JD fines_length = 0.251 * GlobalParams.lam;*/
     /*string nas_filename = "feko/sphere/2lam/4350.nas";
@@ -24,20 +24,22 @@ void temp()
     /*string nas_filename = "feko/sphere/4lam/17474.nas";
     const int rwgs_num = 17474;
     const JD fines_length = 0.251 * GlobalParams.lam;*/
-    string nas_filename = "feko/sphere/8lam/27434.nas";
+    /*string nas_filename = "feko/sphere/8lam/27434.nas";
     const int rwgs_num = 27434;
-    const JD fines_length = 0.23 * GlobalParams.lam;
-    /*string nas_filename = "feko/sphere/16lam/194452.nas";
+    const JD fines_length = 0.23 * GlobalParams.lam;*/
+    string nas_filename = "feko/sphere/16lam/194452.nas";
     const int rwgs_num = 194452;
-    const JD fines_length = 0.251 * GlobalParams.lam;*/
+    const JD fines_length = 0.23 * GlobalParams.lam;
     RWG* old_rwg_ptr = new RWG;
     old_rwg_ptr->ReadNas(nas_filename, rwgs_num);
     OctreeRWG octree_rwg(old_rwg_ptr, fines_length, mpipre);
     octree_rwg.Fillb(90, 0);
-    SpectrumPre spectrum_pre(octree_rwg.mortoncode3d.GetLevelNum(), fines_length, mpipre);
+    SpectrumPre spectrum_pre(octree_rwg.mortoncode3d.GetLevelNum(), octree_rwg.actual_L, mpipre);
+    //for (int i = 0; i < 10; i++) i--;
     MatrixPre matrix_pre(octree_rwg, spectrum_pre, mpipre);
+    //for (int i = 0; i < 10; i++) i--;
     MLFMM mlfmm(matrix_pre, mpipre);
-    //mlfmm.ceshi2();
+    //mlfmm.ceshiP();
     mlfmm.ceshi2();
 }
 

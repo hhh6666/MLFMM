@@ -10,6 +10,7 @@ class MatrixPre
 	
 	MPIpre& mpipre;
 	std::vector<MatCP> aggregations;
+	std::vector<MatCP> decomposes;
 	Eigen::SparseMatrix<JD, Eigen::RowMajor> F, S;
 	Eigen::SparseMatrix<JD, Eigen::ColMajor> aF, aS;
 	std::vector<Eigen::SparseMatrix<JD, Eigen::RowMajor> > Fu_list, Fm_list, Fd_list, S_list;
@@ -24,6 +25,7 @@ class MatrixPre
 	const int send_buffer_size = 1;
 	const int recv_buffer_size = 1;
 	void GetTransfers();
+	void GetDecomposes();
 	void MemPre();
 	void GetNearNb();
 	void GetAggregations();
@@ -65,6 +67,7 @@ public:
 		this->GetInterpolations();
 		this->GetPhaseShifts();
 		this->GetAggregations();
+		this->GetDecomposes();
 		this->GetTransfers();
 		this->GetNearNb();
 	}
@@ -74,7 +77,7 @@ public:
 	void InterpolationProd(bool judge);
 	OctreeRWG& octree;
 	SpectrumPre& spectrum_pre;
-	const int GetRwgNum() { return octree.rwg.edges.size(); }
+	const int GetRwgNum() { return octree.local_rwgs_num(); }
 	Eigen::Vector2cd GetRwgEFarField(const JD theta, const JD phi, const Eigen::VectorXcd& J);
 	Eigen::Vector3cd GetRwgENearField(const VecJD3 r, const Eigen::VectorXcd& J);
 	inline std::vector<int> rwg_index_cube(int level) {

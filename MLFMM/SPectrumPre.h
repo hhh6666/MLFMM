@@ -68,8 +68,8 @@ class SpectrumPre
 	void Get_Spectrum();
 public:
 	SpectrumPre() = default;
-	SpectrumPre(int level_num, JD length, const MPIpre& mpipre)
-		:level_num(level_num), length(length), mpipre(mpipre)
+	SpectrumPre(int level_num, const std::vector<int>& gg, const MPIpre& mpipre)
+		:level_num(level_num), actual_L(gg), mpipre(mpipre)
 	{
 		this->Get_Spectrum();
 	}
@@ -77,7 +77,7 @@ public:
 	std::vector<std::vector<VecJD3>> k_vecs;
 	std::vector<std::vector<JD> > thetas;
 	std::vector<std::vector<JD>> weights;
-	JD length;
+	const std::vector<int>& actual_L;
 	const int level_num;
 	const int GetTopLevelNum() const { return level_num - 2; }
 	std::vector<int> thetas_num, phis_num;
@@ -85,7 +85,7 @@ public:
 	std::vector<int> sptm_thetas_st;
 	std::vector<int> ip_thetas_end;
 	std::vector<int> ip_thetas_st;
-	const int GetSptmNumLevel(int level) {return k_vecs[level].size(); }
+	const int GetSptmNumLevel(int level) {return weights[level].size(); }
 
 };
 

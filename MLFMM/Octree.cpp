@@ -119,6 +119,7 @@ size_t MortonCode3D::GetMortonCode(const VecJD3& point) const
 void OctreeRWG::Fillcubes()
 {
 	const int& level_num = mortoncode3d.GetLevelNum();
+	actual_L.resize(level_num + 1, 0);
 	//return;
 	if (mpipre.GetRank() == 0) cout << mpipre.GetRank() << " 层数 " << level_num << endl;
 	std::vector<std::vector<Cube> > full_cubes(level_num);
@@ -143,7 +144,15 @@ void OctreeRWG::Fillcubes()
 				++childs_num[j][mtc_now];
 				have_parent[j - 1][mortoncode >> ((j - 1) * 3)] = 1;
 			}
+			VecJD3 center_point = mortoncode3d.GetPoint(mtc_now, j);
+			int L = GetL((point - center_point).norm() * 2, GlobalParams.k0);
+			actual_L[j] = std::max(actual_L[j], L);
+			if (j == 0) {
+				int LH = GetLH((point - center_point).norm() * 2, GlobalParams.k0);
+				actual_L[level_num] = std::max(actual_L[level_num], LH);
+			}
 		}
+		
 	}
 	if (mpipre.GetRank() == 0) cout << "完整八叉树构建完成" << endl;
 	//排序
@@ -175,7 +184,7 @@ void OctreeRWG::Fillcubes()
 		}
 		cout << "done" << endl;
 	}*/
-	cout << mpipre.GetRank() << " 排序完成 " << full_cubes[0].size() <<endl;
+	if (mpipre.GetRank() == 0)cout << mpipre.GetRank() << " 排序完成 " << full_cubes[0].size() <<endl;
 
 	//获得权重
 	vector<vector<int>> BP_weights(mpipre.Get_BP_end());
@@ -195,7 +204,7 @@ void OctreeRWG::Fillcubes()
 		}
 	}
 	vector<int>& BP_weight = BP_weights[mpipre.Get_BP_end() - 1];
-	cout << mpipre.GetRank() << "权重计算完成" << endl;
+	if (mpipre.GetRank() == 0)cout << mpipre.GetRank() << "权重计算完成" << endl;
 	//确定本地八叉树
 	for (int i = level_num - 1; i >= 0; --i) {
 		if (mpipre.is_PWP(i)||level_num==1) {
@@ -225,7 +234,7 @@ void OctreeRWG::Fillcubes()
 		}
 		Greedy(cubes_level, cube_weights, cubes[i], i);
 	}
-	cout << mpipre.GetRank() << "本地八叉树确定完成 " << cubes[0].size()<<endl;
+	if(mpipre.GetRank() == 0)cout << mpipre.GetRank() << "本地八叉树确定完成 " << cubes[0].size()<<endl;
 	/*if (mpipre.GetRank() == 0) {
 		for (int i = 0; i < 5; i++) cout << cubes[1][i].mtc << " ";
 		cout << endl;
@@ -300,7 +309,7 @@ void OctreeRWG::Fillcubes()
 		proxy_cubes_level.shrink_to_fit();
 		proxy_cubes.push_back(proxy_cubes_level);
 	}
-	cout << mpipre.GetRank() << "近邻确定完成" << endl;
+	if(mpipre.GetRank() == 0)cout << mpipre.GetRank() << "近邻确定完成 " << near_cubes.size() << " " << cubes[0].size() << endl;
 }
 
 void OctreeRWG::Greedy(std::vector<Cube>& cubes_level, std::vector<CubeWieght>& cube_weights, std::vector<Cube>& cubes_level_new
@@ -349,9 +358,9 @@ void OctreeRWG::Greedy(std::vector<Cube>& cubes_level, std::vector<CubeWieght>& 
 
 void OctreeRWG::GetNear()
 {
-	local_cubes_sent.reserve(mpipre.Get_HSP_end() + 1);
-	far_cubes_recv_num.reserve(mpipre.Get_HSP_end() + 1);
-	far_cubes_process_index.reserve(mpipre.Get_HSP_end());
+	local_cubes_sent.reserve(mortoncode3d.GetLevelNum() - 1);
+	far_cubes_recv_num.reserve(mortoncode3d.GetLevelNum() - 1);
+	far_cubes_process_index.reserve(mortoncode3d.GetLevelNum() - 1);
 	for (int i = 0; i < mortoncode3d.GetLevelNum() - 2; i++) {
 		//cout << mpipre.GetRank() << " 开始发送" << i << endl;
 		vector<size_t> mtc_send(cubes[i].size());
@@ -360,9 +369,9 @@ void OctreeRWG::GetNear()
 		vector<int> cubes_num_process(mpipre.GetSize());
 		int cubes_num = cubes[i].size();
 		MPI_Allgather(&cubes_num, 1, MPI_INT, cubes_num_process.data(), 1, MPI_INT, MPI_COMM_WORLD);
-		cout<< mpipre.GetRank() <<" ";
+		//cout<< mpipre.GetRank() <<" ";
 		//for (auto& cubes_num_p : cubes_num_process) cout << cubes_num_p << " " ;
-		cout << endl;
+		//cout << endl;
 		//将本地盒子的莫顿码发给其他进程
 		vector<int> displs(mpipre.GetSize());
 		for (int j = 0; j < mpipre.GetSize(); j++) {
@@ -372,6 +381,19 @@ void OctreeRWG::GetNear()
 		vector<size_t> mtc_recv(all_cubes_num);
 		MPI_Allgatherv(mtc_send.data(), cubes_num, MPI_UNSIGNED_LONG_LONG, 
 			mtc_recv.data(), cubes_num_process.data(), displs.data(), MPI_UNSIGNED_LONG_LONG, MPI_COMM_WORLD);
+		//if (i == 2 && mpipre.GetRank() == 0) {
+		//	/*for (auto& process : displs) cout << process << " ";
+		//	cout << endl;*/
+		//	/*for (int j = 0;j < mtc_recv.size();j++) {
+		//		if (mtc_recv[j] == 15) {
+		//			cout << "有！！！！" << " " << j << endl;
+		//			
+		//		}
+		//	}*/
+		//	/*for (int j = 0; j < mtc_recv.size(); j++) {
+		//		cout << j << "        " << mtc_recv[j] << endl;
+		//	}*/
+		//}
 		//近邻盒子
 		if (i == 0) {
 			for (auto& near_nb : near_cubes) {
@@ -385,18 +407,19 @@ void OctreeRWG::GetNear()
 					}
 				}
 			}
-			//cout << mpipre.GetRank() << " ?? " << endl;
-			//for (auto& near_cube : near_cubes) cout << near_cube.mtc << " " << near_cube.process_index << "    ";
-			cout << endl;
+
 			std::sort(near_cubes.begin(), near_cubes.end(), [](const NearProxyCube& a, const NearProxyCube& b) {
 				return a.process_index == b.process_index ? a.mtc < b.mtc : a.process_index < b.process_index;
 				}
 			);
-			near_cubes_process_index.resize(mpipre.GetSize(), 0);
-			for (int j = 0; j < mpipre.GetSize() - 1; ++j) {
+			
+
+			near_cubes_process_index.resize(mpipre.GetSize() + 1, 0);
+			for (int j = 0; j < mpipre.GetSize(); ++j) {
 				near_cubes_process_index[j + 1] = near_cubes_process_index[j];
-				while(near_cubes[near_cubes_process_index[j + 1]].process_index == j) ++near_cubes_process_index[j + 1];
+				while(near_cubes_process_index[j + 1] < near_cubes.size() && near_cubes[near_cubes_process_index[j + 1]].process_index == j) ++near_cubes_process_index[j + 1];
 			}
+			//cout << mpipre.GetRank() << "每一进程代理盒子起始位置：" << near_cubes_process_index[0] << " " << near_cubes_process_index[1] << endl;
 			near_cubes_sent.resize(mpipre.GetSize());
 			int index = 0;
 			for (int j = 0; j < mpipre.GetSize(); j++) {
@@ -408,12 +431,13 @@ void OctreeRWG::GetNear()
 					//if (mpipre.GetRank() == 0) cout << index << " " << near_proxy_cubes[index].process_index << " " << near_proxy_cubes.size() << endl;
 				}
 				near_cubes_sent[j] = std::vector<int>(cube_be_sent.begin(), cube_be_sent.end());
+				//cout << mpipre.GetRank() << "发送的盒子数量：" << j << " " << near_cubes_sent[j].size() << endl;
 			}
 		}
 		//cout<< mpipre.GetRank() << " ??? " << endl;
 		//确定每一个代理盒子所属进程
 		auto& transfer_process = mpipre.GetTransferProcess(i);
-		std::vector<int> far_cube_recv_num(transfer_process.size(), 0);
+		std::vector<int> far_cube_recv_num(mpipre.GetSize(), 0);
 		//cout << mpipre.GetRank() << " ??? " << transfer_process.size() << " " << proxy_cubes.size() << endl;
 		for (auto& proxy_cube : proxy_cubes[i]) {
 			for (int j = 0;j < transfer_process.size();j++) {
@@ -424,7 +448,7 @@ void OctreeRWG::GetNear()
 				if (m0 < all_cubes_num && mtc_recv[m0] == proxy_cube.mtc) {
 					//proxy_cube.my_index = m0 - displs[j];
 					proxy_cube.process_index = process_index;
-					++far_cube_recv_num[j];
+					++far_cube_recv_num[process_index];
 					break;
 				}
 			}
@@ -436,10 +460,11 @@ void OctreeRWG::GetNear()
 			return a.process_index == b.process_index ? a.mtc < b.mtc : a.process_index < b.process_index;
 			}
 		);
-		vector<int> far_cubes_process(transfer_process.size(), 0);
-		for (int j = 0; j < transfer_process.size() - 1; ++j) {
-			far_cubes_process[j + 1] = far_cubes_process[j];
-			while (proxy_cubes[i][far_cubes_process[j + 1]].process_index == j) ++far_cubes_process[j + 1];
+		vector<int> far_cubes_process(mpipre.GetSize() + 1, 0);
+		for (int j = 0; j < mpipre.GetSize(); ++j) {
+			far_cubes_process[j + 1] = far_cubes_process[j] + far_cube_recv_num[j];
+			/*far_cubes_process[j + 1] = far_cubes_process[j];
+			while (far_cubes_process[j + 1] < proxy_cubes[i].size() && proxy_cubes[i][far_cubes_process[j + 1]].process_index == j) ++far_cubes_process[j + 1];*/
 		}
 		far_cubes_process_index.push_back(far_cubes_process);
 		//cout << mpipre.GetRank() << " ????? " << endl;
@@ -453,10 +478,21 @@ void OctreeRWG::GetNear()
 				index++;
 			}
 			cubes_sent_level[j] = std::vector<int>(cube_be_sent.begin(), cube_be_sent.end());
+			//if (i == 2) {
+			//	/*if (mpipre.GetRank() == 0) {
+			//		for (auto& proxy_cube : proxy_cubes[i]) {
+			//			cout << proxy_cube.process_index << " " << proxy_cube.mtc << endl;
+			//			for (auto& local_index : proxy_cube.local_index) cout << local_index << " ";
+			//			cout << "done!" << endl;
+			//		}
+			//	}*/
+			//	
+			//	cout << mpipre.GetRank() << " 发送的盒子数量：" << j << " " << cubes_sent_level[j].size() << " " << transfer_process[j] << endl;
+			//}
 		}
 		local_cubes_sent.push_back(cubes_sent_level);
 	}
-	cout<< mpipre.GetRank() << " 获得近远邻完成 " << endl;
+	if(mpipre.GetRank() == 0)cout<< mpipre.GetRank() << " 获得近远邻完成 " << endl;
 }
 
 void OctreeRWG::change_rwgs()
@@ -467,7 +503,8 @@ void OctreeRWG::change_rwgs()
 	near_cube_rwgs_num.resize(near_cubes.size(), 0);
 	int sum1 = 0, sum2 = 0;
 	vector<vector<int>> cube_rwgs_index(cubes[0].size()+ near_cubes.size());
-	//cout << mpipre.GetRank() << " ?" << endl;
+	int sum3 = 0;
+	//cout << mpipre.GetRank() << " ? " << edges_num << endl;
 	for (int i = 0; i < edges_num; i++) {
 		const VecJD3& point = old_rwg_ptr->GetEdgeCenter(i);
 		size_t mtc = mortoncode3d.GetMortonCode(point);
@@ -478,27 +515,43 @@ void OctreeRWG::change_rwgs()
 			++cube_rwgs_num[m0];
 			++sum1;
 		}
-		int m1 = lower_bound(near_cubes.begin(), near_cubes.end(), mtc,[](const NearProxyCube& a, size_t b){
-			return a.mtc < b; }) - near_cubes.begin();
-		if ( m1 < near_cubes.size() && mtc == near_cubes[m1].mtc) {
-			if (near_cubes[m1].process_index != mpipre.GetRank()) {
-				cube_rwgs_index[cubes[0].size() + m1].push_back(i);
-				++sum2;
+		for (int j = 0; j < mpipre.GetSize(); ++j) {
+			auto st = near_cubes.begin() + near_cubes_process_index[j];
+			auto ed = near_cubes.begin() + near_cubes_process_index[j + 1];
+			int m1 = lower_bound(st, ed, mtc, [](const NearProxyCube& a, size_t b) {return a.mtc < b; }) - near_cubes.begin();
+			if (m1 < near_cubes.size() && mtc == near_cubes[m1].mtc) {
+				if (near_cubes[m1].process_index != mpipre.GetRank()) {
+					cube_rwgs_index[cubes[0].size() + m1].push_back(i);
+					++sum2;
+				}
+				++near_cube_rwgs_num[m1];
+				break;
 			}
-			++near_cube_rwgs_num[m1];
 		}
+		//int m1 = lower_bound(near_cubes.begin(), near_cubes.end(), mtc,[](const NearProxyCube& a, size_t b){return a.mtc < b; }) - near_cubes.begin();
+		//if ( m1 < near_cubes.size() && mtc == near_cubes[m1].mtc) {
+		//	if (near_cubes[m1].process_index != mpipre.GetRank()) {
+		//		cube_rwgs_index[cubes[0].size() + m1].push_back(i);
+		//		++sum2;
+		//	}
+		//	
+		//	++near_cube_rwgs_num[m1];
+		//	//++sum3;
+		//}
 	}
-	cube_rwgs_dif.resize(cubes[0].size());
-	for (int i = 0; i < cubes[0].size(); i++) cube_rwgs_dif[i] = i == 0 ? 0 : cube_rwgs_dif[i - 1] + cube_rwgs_num[i - 1];
+	cube_rwgs_dif.resize(cubes[0].size() + 1);
+	for (int i = 0; i <= cubes[0].size(); i++) cube_rwgs_dif[i] = i == 0 ? 0 : cube_rwgs_dif[i - 1] + cube_rwgs_num[i - 1];
 
 	near_cubes_recv_num.resize(mpipre.GetSize(), 0);
 	int near_cubes_index = 0;
-	for (int i = 0; i < mpipre.GetSize(); i++) {
-		while (near_cubes_index<near_cubes.size() && near_cubes[near_cubes_index].process_index == i) {
-			near_cubes_recv_num[i] += near_cube_rwgs_num[near_cubes_index++];
+	for (int j = 0; j < mpipre.GetSize(); j++) {
+		while (near_cubes_index < near_cubes.size() && near_cubes[near_cubes_index].process_index == j) {
+			near_cubes_recv_num[j] += near_cube_rwgs_num[near_cubes_index++];
 		}
+		//cout << "本地进程" << mpipre.GetRank() << " 从进程 " << j << " 接收 " << near_cubes_recv_num[j] << endl;
 	}
-	cout << mpipre.GetRank() << " rwg分配给本地盒子 " << sum1 << " " << sum2 << endl;
+	
+	//cout << mpipre.GetRank() << " rwg分配给本地盒子 " << sum1 << " " << sum2 << " "<< local_rwgs_num() <<endl;
 	rwg.edges.reserve(sum1 + sum2);
 	rwg.points.reserve((sum1 + sum2) / 3);
 	rwg.triangles.reserve((sum1 + sum2) / 1.5);
@@ -533,36 +586,44 @@ void OctreeRWG::change_rwgs()
 	rwg.edges.shrink_to_fit();
 	rwg.points.shrink_to_fit();
 	rwg.triangles.shrink_to_fit();
-	//if (mpipre.GetRank() == 0) cout<<mpipre.GetRank() << "rwg重分配完成" << endl;
-	cout << mpipre.GetRank() << "rwg重分配完成" << endl;
+	if (mpipre.GetRank() == 0) cout<<mpipre.GetRank() << "rwg重分配完成 " << rwg.edges.size()<<" "<< local_rwgs_num()<<endl;
+	//cout << mpipre.GetRank() << "rwg重分配完成" << endl;
 	//cout << "rwg重分配完成" << mpipre.GetRank() << " " << rwgs.size() << endl;
 	//cubes_sort();
 }
 
 void OctreeRWG::Fillb(JD theta, JD phi)
 {
-	cout<< mpipre.GetRank() << " Fillb开始 " << endl;
-	JD ct = cos(theta * rad), st = sin(theta * rad), cp = cos(phi * rad), sp = sin(phi * rad);
-	Vector3d r = Vector3d(st * cp, st * sp, ct);//方向相反
-	b.setZero(rwg.edges.size());
-	MatrixXd T(2, 3);
-	T << ct * cp, ct* sp, -st,
-		-sp, cp, 0;
-	//T.transposeInPlace();
-	Vector2d polor{ -1.0,0.0 };
-	Vector3d plane_wave = T.transpose() * polor;
-	for (int i = 0; i < rwg.edges.size(); i++) {
-		Eigen::Matrix<JD, 3, 6>& Ji = rwg.J_GL[i];
-		for (int m = 0; m < 2; ++m) {
-			JD pmm = m ? -1.0 : 1.0;
-			for (int p = 0; p < GLPN; ++p) {
-				Vector3d Jm = pmm * (Ji.col(m * 3 + p) - rwg.points[rwg.vertex_edges[i][m]]);
-				JD rpr = GlobalParams.k0 * Ji.col(m * 3 + p).dot(r);
-				CP ejkr = CP(cos(rpr), sin(rpr));
-				b[i] += GL_points[p][0] * Jm.dot(plane_wave) * ejkr;
-			}
-		}
-		b[i] *= rwg.edges_length[i] * 0.5;
+	//cout<< mpipre.GetRank() << " Fillb开始 " << endl;
+	rwg.set_wave(theta, phi);
+	int size = local_rwgs_num();
+	b.setZero(size);
+	for (int i = 0; i < size; i++) {
+		b[i] = rwg.Getbi(i);
 	}
-	cout<< mpipre.GetRank() << " Fillb完成 " << endl;
+
+	//JD ct = cos(theta * rad), st = sin(theta * rad), cp = cos(phi * rad), sp = sin(phi * rad);
+	//Vector3d r = Vector3d(st * cp, st * sp, ct);//方向相反
+	//int size = local_rwgs_num();
+	//b.setZero(size);
+	//MatrixXd T(2, 3);
+	//T << ct * cp, ct* sp, -st,
+	//	-sp, cp, 0;
+	////T.transposeInPlace();
+	//Vector2d polor{ -1.0,0.0 };
+	//Vector3d plane_wave = T.transpose() * polor;
+	//for (int i = 0; i < size; i++) {
+	//	Eigen::Matrix<JD, 3, GLPN2>& Ji = rwg.J_GL[i];
+	//	for (int m = 0; m < 2; ++m) {
+	//		JD pmm = m ? -1.0 : 1.0;
+	//		for (int p = 0; p < GLPN; ++p) {
+	//			Vector3d Jm = pmm * (Ji.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[i][m]]);
+	//			JD rpr = GlobalParams.k0 * Ji.col(m * GLPN + p).dot(r);
+	//			CP ejkr = CP(cos(rpr), sin(rpr));
+	//			b[i] += GL_points[p][0] * Jm.dot(plane_wave) * ejkr;
+	//		}
+	//	}
+	//	b[i] *= rwg.edges_length[i] * 0.5;
+	//}
+	//cout<< mpipre.GetRank() << " Fillb完成 " << endl;
 }

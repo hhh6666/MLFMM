@@ -12,7 +12,9 @@ class MLFMM
 	
 public:
 	MLFMM() = default;
-	MLFMM(MatrixPre& matrix_pre, MPIpre& mpipre) : matrix_pre(matrix_pre), mpipre(mpipre) {}
+	MLFMM(MatrixPre& matrix_pre, MPIpre& mpipre) : matrix_pre(matrix_pre), mpipre(mpipre) {
+		b_temp.resize(matrix_pre.octree.b.rows());
+	}
 	
 	void GetFarEfield(double dif)
 	{
@@ -52,7 +54,7 @@ public:
 		std::vector<int> rwg_index0, rwg_index1, rwg_index2;
 		VecJD3 pos1 = matrix_pre.octree.mortoncode3d.GetPoint(matrix_pre.octree.GetProxyCubesLevel(1)[0].mtc, 1);
 		VecJD3 pos0 = matrix_pre.octree.mortoncode3d.GetPoint(matrix_pre.octree.GetProxyCubesLevel(0)[0].mtc, 0);
-		VecJD3 pos_hh = pos0 / matrix_pre.spectrum_pre.length;
+		//VecJD3 pos_hh = pos0 / matrix_pre.spectrum_pre.length;
 		auto& near_cube = matrix_pre.octree.near_cubes[0];
 		std::set<int> ggg, all;
 		for (auto& index : near_cube.local_index) {
@@ -111,7 +113,7 @@ public:
 		cout << "正确结果：" << endl << b1 << endl << "错误结果：" << endl << b2.segment(0, rwgs_num_row) << endl;
 		cout << "误差：" << endl << (b1 - b2.segment(0, rwgs_num_row)).norm()/b1.norm() << endl;
 
-
+		cout << b2.segment(0, rwgs_num_row).cwiseQuotient(b1) << endl;
 		/*MatCP Z_near = Z.block(0, rwgs_num_row, rwgs_num_row, near_index - rwgs_num_row);
 		MatCP Z_far = Z.block(0, near_index, rwgs_num_row, size - near_index);
 		VecCP b1(size), b2(size), b3(size), b4(size);
@@ -164,14 +166,12 @@ public:
 	}
 	void ceshi2() {
 		J_end.resize(matrix_pre.GetRwgNum());
-		b_temp.resize(matrix_pre.octree.b.rows());
-		
 		GmresP(matrix_pre.octree.b, J_end);
 		std::cout <<" 右端项范数："<< matrix_pre.octree.b.squaredNorm() << std::endl;
 		////std::cout << "结束" << std::endl;
 		//GetFarEfield(0.25);
 		//spectrum_pre.clear_mem();
-		JD dif = 0.5;
+		JD dif = 0.25;
 		int num = (180 + 1e-10) / dif;
 		for (int i = 0; i <= num; ++i) {
 			JD phi = JD(i) * dif;
@@ -200,7 +200,40 @@ public:
 		Eigen::Map<VecCP> b_map(b_ptr, JJ.rows());
 		b_map += JJ;
 	}
-
+	void ceshiP() {
+		int size = matrix_pre.GetRwgNum();
+		std::vector<Cube>& cube_floor = matrix_pre.octree.GetCubesLevel(0);
+		VecCP J(size), b(size), x(size);
+		x.setOnes();
+		b.setZero();
+		b_temp.setZero();
+		matrix_pre.NearProd(x, b_temp);
+		matrix_pre.AggregationProd(x.data(), 0);
+		matrix_pre.InterpolationProd(0);
+		matrix_pre.InterpolationProd(1);
+		matrix_pre.AggregationProd(b_temp.data(), 1);
+		matrix_pre.SelfProd(b_temp, b.data());
+		//mpiout(b_temp.squaredNorm(), mpipre);
+		int num = matrix_pre.octree.cube_rwgs_num[0];
+		/*cout << mpipre.GetRank() << " " << b.topRows(num).squaredNorm() << endl;
+		cout << b.topRows(num).transpose() << endl;
+		cout << mpipre.GetRank() << " " << num << " " << cube_floor[0].mtc << endl;*/
+		b += x;
+		/*cout << b.topRows(num).transpose() << endl;
+		cout << mpipre.GetRank() << " " << b.topRows(num).squaredNorm() << endl;*/
+		JD sss = 0;
+		for (int i = 0; i < cube_floor.size(); i++) {
+			int st = matrix_pre.octree.cube_rwgs_dif[i];
+			Eigen::Map<VecCP> gg(b.data() + st, matrix_pre.octree.cube_rwgs_num[i]);
+			//cout << cube_floor[i].mtc << " "<< gg.squaredNorm() << endl;
+			if (cube_floor[i].mtc < 32000)sss += gg.squaredNorm();
+			//mpiout(gg.squaredNorm(), mpipre);
+		}
+		//Prod(x.data(), b.data());
+		//mpiout(sss, mpipre);
+		//mpiout(b.squaredNorm(), mpipre);
+		//cout << b.squaredNorm() << " "<<sss << endl;
+	}
 	void GmresP(const Eigen::VectorXcd& b, Eigen::VectorXcd& J);
 };
 

@@ -84,7 +84,7 @@ RWG& RWG::ReadNas(std::string filename, int triangle_num)
 	points.shrink_to_fit();
 	triangles.shrink_to_fit();
 	edges.shrink_to_fit();
-	cout << "读取文件成功" << endl;
+	//cout << "读取文件成功" << endl;
 	//cout << start_point.transpose() << "       " << end_point.transpose() << endl;
 	return *this;
 }
@@ -110,11 +110,13 @@ RWG& RWG::initial()
 {
 	Matrix<JD, 3, 3> l;
 	Matrix<JD, 3, 3> u;
+	//cout << 1 << endl;
 	tri_l.reserve(triangles.size());
 	tri_l_normal.reserve(triangles.size());
 	tri_area.reserve(triangles.size());
 	tri_normal.reserve(triangles.size());
 	for (int i = 0; i < triangles.size(); ++i) {
+		//cout << " " << i << endl;
 		VecJD3& v1 = points[triangles[i][0]];
 		VecJD3& v2 = points[triangles[i][1]];
 		VecJD3& v3 = points[triangles[i][2]];
@@ -130,16 +132,16 @@ RWG& RWG::initial()
 		tri_area.push_back(n.norm() / 2.0);
 		tri_normal.push_back(n.normalized());
 	}
-
-	Matrix<JD, 3, 6> g;
+	//cout << 2 << endl;
+	Eigen::Matrix<JD, 3, GLPN2> g;
 	Vector2i edge_vertex;
 	J_GL.reserve(edges.size());
 	vertex_edges.reserve(edges.size());
 	for (int i = 0; i < edges.size(); ++i) {
 		for (int j = 0; j < 2; ++j) {
 			Vector3i& tri = triangles[edges[i][j]];
-			for (int k = 0; k < 3; ++k) {
-				g.col(j * 3 + k) = GL_points[k][1] * points[tri[0]] + GL_points[k][2] * points[tri[1]]
+			for (int k = 0; k < GLPN; ++k) {
+				g.col(j * GLPN + k) = GL_points[k][1] * points[tri[0]] + GL_points[k][2] * points[tri[1]]
 					+ GL_points[k][3] * points[tri[2]];
 			}
 		}
@@ -162,6 +164,7 @@ RWG& RWG::initial()
 		J_GL.push_back(g);
 		vertex_edges.push_back(edge_vertex);
 	}
+	//cout << 3 << endl;
 	//cout << "size" << J_GL.size() << " " << vertex_edges.size() << endl;
 	//cout << "初始化完成" << endl;
 	return *this;
@@ -190,14 +193,14 @@ Eigen::Vector<JD, 4> RWG::GetI1I2(const VecJD3& r, int tri_index)
 	return ans;
 }
 
-CP RWG::GetZij(int i, int j)
+CP RWG::GetEFIEij(int i, int j)
 {
 	JD lam = GlobalParams.lam;
 	JD k0 = GlobalParams.k0;
 	CP C1 = Zf * k0 * 0.25 * cpdj;
 	CP C2 = Zf / k0 * cpdj;
-	Eigen::Matrix<JD, 3, 6>& Ji = J_GL[i];
-	Eigen::Matrix<JD, 3, 6>& Jj = J_GL[j];
+	Eigen::Matrix<JD, 3, GLPN2>& Ji = J_GL[i];
+	Eigen::Matrix<JD, 3, GLPN2>& Jj = J_GL[j];
 	CP Zij = CP(0.0, 0.0);
 	for (int m = 0; m < 2; ++m) {
 		JD pmm = m ? -1.0 : 1.0;
@@ -206,21 +209,21 @@ CP RWG::GetZij(int i, int j)
 			JD Rij = TriDistence(edges[i][m], edges[j][n]);
 			JD pm = m == n ? 1.0 : -1.0;
 			for (int p = 0; p < GLPN; ++p) {
-				//if (Rij < lam * 0.03) cout << "Zij=" << Zij << " "<<m<<" "<<n<<endl;
-				if (Rij < eps*lam) {
+				VecJD3 rp = Ji.col(m * GLPN + p);
+				if (Rij < eps * lam) {
 					//cout << i << " " << j << endl;
-					VecJD3 Jm = pmm * (Ji.col(m * 3 + p) - points[vertex_edges[i][m]]);
-					Vector<JD, 4> I1I2 = GetI1I2(Ji.col(m * 3 + p), edges[j][n]);
+					VecJD3 Jm = pmm * (rp - points[vertex_edges[i][m]]);
+					Vector<JD, 4> I1I2 = GetI1I2(rp, edges[j][n]);
 					VecCP3 a = C1 * Jm * pmn;
-					CP b = -pm * C2 + pmn * C1 * Jm.dot(Ji.col(m * 3 + p) - points[vertex_edges[j][n]]);
+					CP b = -pm * C2 + pmn * C1 * Jm.dot(rp - points[vertex_edges[j][n]]);
 					Zij += GL_points[p][0] * (I1I2.head(3).dot(a) + b * I1I2[3]) / tri_area[edges[j][n]];
 					//cout << "Zij=" << Zij << " "<< I1I2.transpose()<< endl;
 				}
 				//cout << i << "  " << j << endl;
 				for (int q = 0; q < GLPN; ++q) {
-					VecJD3 Jm = pmm * (Ji.col(m * 3 + p) - points[vertex_edges[i][m]]);
-					VecJD3 Jn = pmn * (Jj.col(n * 3 + q) - points[vertex_edges[j][n]]);
-					JD Rpq = (Ji.col(m * 3 + p) - Jj.col(n * 3 + q)).norm();
+					VecJD3 Jm = pmm * (rp - points[vertex_edges[i][m]]);
+					VecJD3 Jn = pmn * (Jj.col(n * GLPN + q) - points[vertex_edges[j][n]]);
+					JD Rpq = (rp - Jj.col(n * GLPN + q)).norm();
 					JD ct = cos(-Rpq * k0), st = sin(-Rpq * k0);
 					CP G = Rij < lam * 0.03 ? CP(-0.5 * k0 * k0 * Rpq, k0 * k0 * k0 * Rpq * Rpq / 6.0 - k0)
 						: CP(ct, st) / Rpq;
@@ -235,30 +238,184 @@ CP RWG::GetZij(int i, int j)
 	return Zij;
 }
 
-void MOM::Fillb(double theta, double phi)
+Eigen::Vector<JD, 4> RWG::GetI3I4(const VecJD3& r, int tri_index)
 {
-	double ct = cos(theta * rad), st = sin(theta * rad), cp = cos(phi * rad), sp = sin(phi * rad);
-	Vector3d r = Vector3d(st * cp, st * sp, ct);//方向相反
-	b.setZero(rwg.edges.size());
-	MatrixXd T(2, 3);
-	T << ct * cp, ct* sp, -st,
-		-sp, cp, 0;
-	//T.transposeInPlace();
-	Vector2d polor{ -1.0,0.0 };
-	Vector3d plane_wave = T.transpose() * polor;
-	for (int i = 0; i < rwg.edges.size(); i++) {
-		Eigen::Matrix<JD, 3, 6>& Ji = rwg.J_GL[i];
-		for (int m = 0; m < 2; ++m) {
-			double pmm = m ? -1.0 : 1.0;
-			for (int p = 0; p < GLPN; ++p) {
-				Vector3d Jm = pmm * (Ji.col(m * 3 + p) - rwg.points[rwg.vertex_edges[i][m]]);
-				JD rpr = GlobalParams.k0 * Ji.col(m * 3 + p).dot(r);
-				CP ejkr = CP(cos(rpr), sin(rpr));
-				b[i] += GL_points[p][0] * Jm.dot(plane_wave) * ejkr;
-			}
+	Eigen::Vector<JD, 4> ans = Eigen::Vector<JD, 4>::Zero();
+	for (int i = 0; i < 3; ++i) {
+		VecJD3& v1 = points[triangles[tri_index][i]];
+		VecJD3& v2 = points[triangles[tri_index][(i + 1) % 3]];
+		JD lp = (v2 - r).dot(tri_l[tri_index].col(i));
+		JD lm = (v1 - r).dot(tri_l[tri_index].col(i));
+		JD Rp = (v2 - r).norm();
+		JD Rm = (v1 - r).norm();
+		JD d = abs(tri_normal[tri_index].dot(r - v2));
+		JD P0 = abs((v1 - r).dot(tri_l_normal[tri_index].col(i)));
+		JD R0 = sqrt(d * d + P0 * P0);
+		JD f = log((Rp + lp) / (Rm + lm));
+		ans.head(3) += -tri_l_normal[tri_index].col(i) * f;
+		JD P0u = (v1 - r).dot(tri_l_normal[tri_index].col(i)) / P0;
+		//cout << d << " " << GlobalParams.lam * 0.01 << endl;
+		/*if (d < min_eps) {
+			JD beta = lp / (P0 * Rp) - lm / (P0 * Rm);
+			ans[3] += -P0u * beta;
 		}
-		b[i] *= rwg.edges_length[i] * 0.5;
+		else {
+			JD beta = atan(d * lp / (P0 * Rp)) - atan(d * lm / (P0 * Rm)) + atan(lm / P0) - atan(lp / P0);
+			ans[3] += -P0u * beta / d;
+		}*/
+		JD beta = atan(P0 * lp / (R0 * R0 + d * Rp)) - atan(P0 * lm / (R0 * R0 + d * Rm));
+		ans[3] += P0u * beta;
 	}
+	return ans;
+}
+
+CP RWG::GetMFIEij(int i, int j)
+{
+	JD lam = GlobalParams.lam;
+	JD k0 = GlobalParams.k0;
+	//CP C1 = Zf * k0 * 0.25 * cpdj;
+	//CP C2 = Zf / k0 * cpdj;
+	Eigen::Matrix<JD, 3, GLPN2>& Ji = J_GL[i];
+	Eigen::Matrix<JD, 3, GLPN2>& Jj = J_GL[j];
+	CP Zij1 = CP(0.0, 0.0), Zij2 = CP(0.0, 0.0);
+	
+	/*if (i == j) {
+		for (int m = 0; m < 2; ++m) {
+			int trim = edges[i][m];
+			JD pmm = m ? -1.0 : 1.0;
+			CP temp = CP(0.0, 0.0);
+			for (int p = 0; p < GLPN; ++p) {
+				VecJD3 Jm = pmm * (Ji.col(m * 3 + p) - points[vertex_edges[i][m]]);
+				temp += GL_points[p][0] * (Jm.dot(Jm));
+			}
+			Zij2 += temp / tri_area[trim];
+		}
+	}*/
+	for (int m = 0; m < 2; ++m) {
+		int trim = edges[i][m];
+		JD pmm = m ? -1.0 : 1.0;
+		for (int n = 0; n < 2; ++n) {
+			int trin = edges[j][n];
+			JD pmn = n ? -1.0 : 1.0;
+			if (trim == trin) {
+				CP temp = CP(0.0, 0.0);
+				for (int p = 0; p < GLPN; ++p) {
+					VecJD3 Jm = pmm * (Ji.col(m * GLPN + p) - points[vertex_edges[i][m]]);
+					VecJD3 Jn = pmn * (Ji.col(m * GLPN + p) - points[vertex_edges[j][n]]);
+					temp += GL_points[p][0] * (Jm.dot(Jn));
+				}
+				Zij2 += temp / tri_area[trim];
+				continue;
+			}
+			
+			JD Rij = TriDistence(trim, trin);
+			//bool ok = i == 0 && j == 1 || i == 1 && j == 0 || i == 0 && j == 0;
+			if (Rij < lam * 0.02) {
+				for (int p = 0; p < GLPN; ++p) {
+					VecJD3 rp = Ji.col(m * GLPN + p);
+					VecJD3 Jm = pmm * (rp - points[vertex_edges[i][m]]);
+					VecJD3 Rn = rp - points[vertex_edges[i][n]];
+					VecJD3 d_vec = Rn.dot(tri_normal[trin]) * tri_normal[trin];
+					VecCP3 temp = VecCP3::Zero();
+
+					Vector<JD, 4> I1I2 = GetI1I2(rp, trin);
+					Vector<JD, 4> I3I4 = GetI3I4(rp, trin);
+					temp += (I3I4.head(3) - tri_normal[trin] * I3I4[3]) / tri_area[edges[j][n]];
+					temp += k0 * k0 * 0.5 * (I1I2.head(3) - tri_normal[trin] * I1I2[3]) / tri_area[edges[j][n]];
+					/*if (ok) {
+						cout << ((I3I4.head(3) - tri_normal[trin] * I3I4[3]) / tri_area[edges[j][n]]).transpose() << endl;
+						cout << (k0 * k0 * 0.5 * (I1I2.head(3) - tri_normal[trin] * I1I2[3]) / tri_area[edges[j][n]]).transpose() << endl;
+					}*/
+					/*temp += (I3I4.head(3) + (Rn - d_vec) * I3I4[3]) / tri_area[edges[j][n]];
+					temp += k0 * k0 * 0.5 * (I1I2.head(3) + (Rn - d_vec) * I1I2[3]) / tri_area[edges[j][n]];*/
+					for (int q = 0; q < GLPN; ++q) {
+						//VecJD3 Jn = pmn * (Jj.col(n * 3 + q) - points[vertex_edges[j][n]]);
+						VecJD3 Jn = Jj.col(n * GLPN + q) - rp;
+						JD Rpq = (rp - Jj.col(n * GLPN + q)).norm();
+						JD ct = cos(-Rpq * k0), st = sin(-Rpq * k0);
+						CP G = -k0 * k0 * k0 * CP(k0 * Rpq * 0.125 * (1.0 - k0 * k0 * Rpq * Rpq / 18.0), (1.0 - k0 * k0 * Rpq * Rpq * 0.1) / 3);
+						//cout << G << " " << CP(0.0, k0 * k0 * k0 / 3.0) << " "<< Rpq<<endl;
+						temp += GL_points[q][0] * G * Jn;
+						//if (ok) cout << (GL_points[q][0] * G * Jn).transpose() << endl;
+					}
+					Zij1 += GL_points[p][0] * Jm.dot(Rn.cross(temp));
+					//if (ok) cout << GL_points[p][0] * Jm.dot(Rn.cross(temp)) << endl << endl;
+				}
+			}
+			else {
+				for (int p = 0; p < GLPN; ++p) {
+					VecJD3 Jm = pmm * (Ji.col(m * GLPN + p) - points[vertex_edges[i][m]]);
+					for (int q = 0; q < GLPN; ++q) {
+						VecJD3 Jn = pmn * (Jj.col(n * GLPN + q) - points[vertex_edges[j][n]]);
+						JD Rpq = (Ji.col(m * GLPN + p) - Jj.col(n * GLPN + q)).norm();
+						JD ct = cos(-Rpq * k0), st = sin(-Rpq * k0);
+						CP G = (1.0 + cpdj * k0 * Rpq) * CP(ct, st) / (Rpq * Rpq * Rpq);
+						VecJD3 temp = tri_normal[trim].cross((Ji.col(m * GLPN + p) - Jj.col(n * GLPN + q)).cross(Jn));
+						Zij1 += GL_points[p][0] * GL_points[q][0] * (Jm.dot(temp)) * G;
+					}
+				}
+
+			}
+			/*if (ok) {
+				cout << Zij2 * edges_length[i] * edges_length[j] / 8.0 << endl;
+				cout << Rij << " jj " << lam * 0.03 << " " << Zij1 * (edges_length[i] * edges_length[j] / (16.0 * pi)) << endl;
+			}*/
+		}
+	}
+	Zij1 *= edges_length[i] * edges_length[j] / (16.0 * pi);
+	Zij2 *= edges_length[i] * edges_length[j] / 8.0;
+	return Zij1 + Zij2;
+}
+
+CP RWG::GetZij(int i, int j)
+{
+	return alpha * GetEFIEij(i, j) + Zf * (1.0 - alpha) * GetMFIEij(i, j);
+}
+
+CP RWG::Getbi(int i)
+{
+	return alpha * GetEbi(i) + (1.0 - alpha) * GetHbi(i);
+}
+
+void MOM::Fillb()
+{
+	b.setZero(rwg.edges.size());
+	for (int i = 0; i < rwg.edges.size(); i++) {
+		b[i] = rwg.Getbi(i);
+	}
+}
+
+
+CP RWG::GetEbi(int i)
+{
+	CP bi(0, 0);
+	Eigen::Matrix<JD, 3, GLPN2>& Ji = J_GL[i];
+	for (int m = 0; m < 2; ++m) {
+		double pmm = m ? -1.0 : 1.0;
+		for (int p = 0; p < GLPN; ++p) {
+			Vector3d Jm = pmm * (Ji.col(m * GLPN + p) - points[vertex_edges[i][m]]);
+			JD rpr = -GlobalParams.k0 * Ji.col(m * GLPN + p).dot(k_unit);
+			CP ejkr = CP(cos(rpr), sin(rpr));
+			bi += GL_points[p][0] * Jm.dot(Ep) * ejkr;
+		}
+	}
+	return bi * edges_length[i] * 0.5;
+}
+CP RWG::GetHbi(int i)
+{
+	CP bi(0, 0);
+	Eigen::Matrix<JD, 3, GLPN2>& Ji = J_GL[i];
+	for (int m = 0; m < 2; ++m) {
+		int trim = edges[i][m];
+		JD pmm = m ? -1.0 : 1.0;
+		for (int p = 0; p < GLPN; ++p) {
+			VecJD3 Jm = pmm * (Ji.col(m * GLPN + p) - points[vertex_edges[i][m]]);
+			JD rpr = -GlobalParams.k0 * Ji.col(m * GLPN + p).dot(k_unit);
+			CP ejkr = CP(cos(rpr), sin(rpr));
+			bi += GL_points[p][0] * Jm.dot(tri_normal[trim].cross(Hp)) * ejkr;
+		}
+	}
+	return bi * edges_length[i] * 0.5;
 }
 
 Eigen::Vector2cd MOM::FarField(double theta, double phi)
@@ -270,12 +427,12 @@ Eigen::Vector2cd MOM::FarField(double theta, double phi)
 	T << ct * cp, ct* sp, -st,
 		-sp, cp, 0;
 	for (int i = 0; i < rwg.edges.size(); i++) {
-		Eigen::Matrix<double, 3, 6>& Ji = rwg.J_GL[i];
+		Eigen::Matrix<JD, 3, GLPN2>& Ji = rwg.J_GL[i];
 		for (int m = 0; m < 2; ++m) {
 			double pmm = m ? -1 : 1;
 			for (int p = 0; p < GLPN; ++p) {
-				Vector3d Jm = pmm * (Ji.col(m * 3 + p) - rwg.points[rwg.vertex_edges[i][m]]);
-				double inrpr = GlobalParams.k0 * Ji.col(m * 3 + p).dot(r);
+				Vector3d Jm = pmm * (Ji.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[i][m]]);
+				double inrpr = GlobalParams.k0 * Ji.col(m * GLPN + p).dot(r);
 				double ct = cos(inrpr), st = sin(inrpr);
 				e += GL_points[p][0] * rwg.edges_length[i] * x(i) * Jm * CP(ct, st) * 0.5;
 			}
@@ -283,6 +440,7 @@ Eigen::Vector2cd MOM::FarField(double theta, double phi)
 	}
 	return T * (-cpdj * Zf * GlobalParams.k0) / (4.0 * pi) * e;
 }
+
 
 void MOM::FillZ()
 {
@@ -299,29 +457,29 @@ void MOM::FillZ()
 		}
 	}
 
-	Z_index.resize(N+1);
-	lu_list.resize(N);
-	for (int i = 0; i < N; ++i) {
-		Z_index[i] = i * size / N;
-		cout << Z_index[i] << endl;
-	}
-	Z_index[N] = size;
-	for (int i = 0; i < N; ++i) {
-		int block_size = Z_index[i + 1] - Z_index[i];
-		Eigen::PartialPivLU<MatCP> Zinv(Z.block(Z_index[i], Z_index[i], block_size, block_size));
-		lu_list[i] = Zinv;
-		//if(i==0)cout << Zinv.solve(Z.block(Z_index[i], Z_index[i], block_size, block_size)).block(0,0,5,5) << endl;
-	}
+	//Z_index.resize(N+1);
+	//lu_list.resize(N);
+	//for (int i = 0; i < N; ++i) {
+	//	Z_index[i] = i * size / N;
+	//	cout << Z_index[i] << endl;
+	//}
+	//Z_index[N] = size;
+	//for (int i = 0; i < N; ++i) {
+	//	int block_size = Z_index[i + 1] - Z_index[i];
+	//	Eigen::PartialPivLU<MatCP> Zinv(Z.block(Z_index[i], Z_index[i], block_size, block_size));
+	//	lu_list[i] = Zinv;
+	//	//if(i==0)cout << Zinv.solve(Z.block(Z_index[i], Z_index[i], block_size, block_size)).block(0,0,5,5) << endl;
+	//}
 }
 
 void MOM::SelfProd(VecCP& b, CP* b_str)
 {
-	Map<VecCP> b_map(b_str, b.size());
-	//b_map = b;
-	for (int i = 0; i < N; i++) {
-		int block_size = Z_index[i + 1] - Z_index[i];
-		b_map.segment(Z_index[i], block_size) = lu_list[i].solve(b.segment(Z_index[i], block_size));
-	}
+	//Map<VecCP> b_map(b_str, b.size());
+	////b_map = b;
+	//for (int i = 0; i < N; i++) {
+	//	int block_size = Z_index[i + 1] - Z_index[i];
+	//	b_map.segment(Z_index[i], block_size) = lu_list[i].solve(b.segment(Z_index[i], block_size));
+	//}
 }
 
 void MOM::Prod(const VecCP& x, CP* b_str)

@@ -8,8 +8,8 @@ void MatrixPre::GetNearNb()
 	
 	std::vector<Cube>& cube_floor = octree.GetCubesLevel(0);
 	auto& near_cubes = octree.near_cubes;
-	double norm_sum = 0;
-	cout<<mpipre.GetRank()<<"开始填充近作用矩阵 "<< cube_floor.size() <<endl;
+	JD norm_sum = 0;
+	//cout<<mpipre.GetRank()<<"开始填充近作用矩阵 "<< cube_floor.size() <<endl;
 	Zinv_list.reserve(cube_floor.size());
 	for (int i = 0; i < cube_floor.size(); i++) {
 		int st = octree.cube_rwgs_dif[i], ed = st + octree.cube_rwgs_num[i], size = octree.cube_rwgs_num[i];
@@ -23,7 +23,7 @@ void MatrixPre::GetNearNb()
 		}
 		Eigen::PartialPivLU<MatCP> Zinv(Zs);
 		//cout <<"矩阵范数"<< Zs.squaredNorm() << endl;
-		norm_sum+=Zs.squaredNorm();
+		norm_sum += size * size;
 		Zinv_list.push_back(Zinv);
 	}
 
@@ -56,15 +56,16 @@ void MatrixPre::GetNearNb()
 				}
 			}
 			near_matrix_list.push_back(Zn);
-			norm_sum += Zn.squaredNorm();
+			norm_sum += Zn.size();
 			near_cubes[k].index.push_back(near_matrix_list.size() - 1);
 		}
 		proxy_rwgs_st += near_cubes[k].process_index == mpipre.GetRank() ? 0 : octree.near_cube_rwgs_num[k];
 	}
-	JD all_sum = 0;
+	/*JD all_sum = 0;
 	MPI_Reduce(&norm_sum, &all_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-	if(mpipre.GetRank() == 0) cout <<"总范数"<< norm_sum << endl;
-	cout << mpipre.GetRank() << "近作用矩阵填充完成 " << near_matrix_list.size() << endl;
+	if(mpipre.GetRank() == 0) cout <<"总范数"<< norm_sum << endl;*/
+	JD mem_all = mpiout(norm_sum, mpipre);
+	if (mpipre.GetRank() == 0)cout << mpipre.GetRank() << "近作用矩阵填充完成 " << near_matrix_list.size() << " " << MemUsed(mem_all) * 2 << "GB" << endl;
 }
 
 void MatrixPre::NearProd(const VecCP& x, VecCP& b)
@@ -80,18 +81,20 @@ void MatrixPre::NearProd(const VecCP& x, VecCP& b)
 	for (int i = 0; i < mpipre.GetSize(); i++) {
 		int m0 = (rank + i + 1) % mpipre.GetSize();
 		auto& cubes_sent = cubes_sent_process[m0];
-		//cout << m0 << " " << cubes_sent_process[m0].size() << endl;
+		//cout << mpipre.GetRank() << " 向 " << m0 << " 发送 " << cubes_sent_process[m0].size() << endl;
 		if (cubes_sent.empty()) continue;
 		int shift = 0;
 		for (auto& j : cubes_sent) {
-			Map<VecCP> x_sent(mpi_mem_st_ptr + shift, octree.cube_rwgs_num[j]);
+			Map<VecCP> x_sent(st + shift, octree.cube_rwgs_num[j]);
 			x_sent = x.segment(octree.cube_rwgs_dif[j], octree.cube_rwgs_num[j]);
 			shift += octree.cube_rwgs_num[j];
-			//cout << j << "   "<< shift<<endl;
+			/*if (x_sent.squaredNorm() > 1e9) {
+				cout <<mpipre.GetRank()<<" "<< m0<<" "<< j << " ??? " << octree.cube_rwgs_num[j] << endl;
+			}*/
 		}
 		send_requests.push(MPI_Request());
 		Map<VecCP> hh2(st, shift);
-		//cout << "发送范数 " << hh2.squaredNorm() << " " << hh2.topRows(3).transpose() << endl;
+		//cout << mpipre.GetRank() << " 发送范数 " << hh2.squaredNorm() << " " << hh2.topRows(2).transpose() << " " << shift << " "<< hh2.bottomRows(2).transpose()<<endl;
 		MPI_Isend(st, shift , MPI_DOUBLE_COMPLEX, m0, 0, MPI_COMM_WORLD, &send_requests.back());
 		st += shift;
 	}
@@ -99,7 +102,7 @@ void MatrixPre::NearProd(const VecCP& x, VecCP& b)
 	CP* st_temp = st;
 	for (int i = 0; i < mpipre.GetSize(); i++) {
 		int m0 = (rank - i - 1 + mpipre.GetSize()) % mpipre.GetSize();
-		//cout << m0 << "   " << octree.near_cubes_recv_num[m0] << " " << mpi_mem_end_ptr - st << endl;
+		//cout << mpipre.GetRank() << " 从 " << m0 << " 接收  " << octree.near_cubes_recv_num[m0] << " " << mpi_mem_end_ptr - st << endl;
 		if(octree.near_cubes_recv_num[m0] == 0) continue;
 		recv_requests.push(MPI_Request());
 		MPI_Irecv(st, octree.near_cubes_recv_num[m0], MPI_DOUBLE_COMPLEX, m0, 0, MPI_COMM_WORLD, &recv_requests.back());
@@ -111,7 +114,7 @@ void MatrixPre::NearProd(const VecCP& x, VecCP& b)
 		if (octree.near_cubes_recv_num[m0] == 0) continue;
 		MPI_Wait(&recv_requests.front(), MPI_STATUS_IGNORE);
 		Map<VecCP> hh2(st_temp, octree.near_cubes_recv_num[m0]);
-		//cout << "接收范数" << hh2.squaredNorm() << " "<< hh2.topRows(3).transpose() << endl;
+		//cout << mpipre.GetRank() << " 接收范数" << hh2.squaredNorm() << " "<< hh2.topRows(3).transpose() << endl;
 		for (int k = octree.near_cubes_process_index[m0]; k < near_cubes.size() && near_cubes[k].process_index == m0; ++k) {//第near_process_st个盒子接收到谱后依次关系到对应的本地盒子
 			Map<VecCP> x_recv(st_temp, octree.near_cube_rwgs_num[k]);//第k个近邻盒子的收到的谱
 			//cout << "收到" << near_cubes[k].index.size() << " " << octree.near_cube_rwgs_num[k] << " " << k << endl;
@@ -138,12 +141,59 @@ void MatrixPre::SelfProd(const VecCP& x, CP* b_str)
 	}
 }
 
+void MatrixPre::GetDecomposes()
+{
+	std::vector<Cube>& cube_floor = octree.GetCubesLevel(0);
+	int level_num = spectrum_pre.level_num;
+	int spectrum_num = spectrum_pre.k_vecs[level_num].size();
+	//cout << "聚合" << spectrum_num << endl;
+	decomposes.reserve(cube_floor.size());
+	const RWG& rwg = octree.rwg;
+	int edge_index = 0;
+	for (int i = 0; i < cube_floor.size(); i++) {
+		auto& cube = cube_floor[i];
+		VecJD3 point = octree.mortoncode3d.GetPoint(cube.mtc, 0);
+		MatCP decompose(octree.cube_rwgs_num[i], spectrum_num * 2);
+		//cout << i << " " << octree.cube_rwgs_num[i] << endl;
+		for (int j = 0; j < octree.cube_rwgs_num[i]; j++) {
+			const Eigen::Matrix<JD, 3, GLPN2>& Jj = rwg.J_GL[edge_index];
+			for (int row = 0; row < spectrum_num; row++) {
+				VecCP3 e1 = VecCP3::Zero();
+				VecCP3 e2 = VecCP3::Zero();
+				for (int m = 0; m < 2; ++m)
+				{
+					JD pmm = m ? -1.0 : 1.0;
+					for (int p = 0; p < GLPN; p++) {
+						Vector3d Jm = pmm * (Jj.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[edge_index][m]]);
+						JD inrpr = -(spectrum_pre.k_vecs[level_num][row]).dot(Jj.col(m * GLPN + p) - point);
+						JD ct = cos(inrpr), st = sin(inrpr);
+						Vector3d n_unit = rwg.tri_normal[rwg.edges[edge_index][m]];
+						VecCP3 ej = GL_points[p][0] * rwg.edges_length[edge_index] * (Jm)*CP(ct, st);
+						VecCP3 eh = GL_points[p][0] * rwg.edges_length[edge_index] * (Jm.cross(n_unit)) * CP(ct, st);
+						e1 += ej;// +CPD(0.0, k_unit[0].norm() / (4.0 * pi)) * mj;
+						e2 += eh;
+					}
+
+				}
+				e2 = (spectrum_pre.k_vecs[level_num][row]).cross(e2).conjugate();
+				decompose.block(j, row, 1, 1) = spectrum_pre.TCtoS[row].row(0) * 0.5 * (rwg.alpha * e1 - (1.0 - rwg.alpha)/ GlobalParams.k0 * e2);
+				decompose.block(j, row + spectrum_num, 1, 1) = spectrum_pre.TCtoS[row].row(1) * 0.5 * (rwg.alpha * e1 - (1.0 - rwg.alpha)/ GlobalParams.k0 * e2);
+				/*decompose.block(row, j, 1, 1) = spectrum_pre.TCtoS[row].row(0) * 0.5 * e1;
+				decompose.block(row + spectrum_num, j, 1, 1) = spectrum_pre.TCtoS[row].row(1) * 0.5 * e1;*/
+			}
+			++edge_index;
+		}
+		decompose *= CP(0.0, Zf * GlobalParams.k0 / (4.0 * pi));
+		decomposes.push_back(decompose);
+	}
+}
+
 void MatrixPre::GetAggregations()
 {
 	std::vector<Cube>& cube_floor = octree.GetCubesLevel(0);
 	int level_num = spectrum_pre.level_num;
 	int spectrum_num = spectrum_pre.k_vecs[level_num].size();
-	cout <<"聚合"<< spectrum_num << endl;
+	JD mem_sum = 0;
 	aggregations.reserve(cube_floor.size());
 	const RWG& rwg = octree.rwg;
 	int edge_index = 0;
@@ -153,30 +203,35 @@ void MatrixPre::GetAggregations()
 		MatCP aggregation(spectrum_num * 2, octree.cube_rwgs_num[i]);
 		//cout << i << " " << octree.cube_rwgs_num[i] << endl;
 		for (int j = 0; j < octree.cube_rwgs_num[i]; j++) {
-			const Eigen::Matrix<JD, 3, 6>& Jj = rwg.J_GL[edge_index];
+			const Eigen::Matrix<JD, 3, GLPN2>& Jj = rwg.J_GL[edge_index];
 			for (int row = 0; row < spectrum_num; row++) {
-				VecCP3 e = VecCP3::Zero();
+				VecCP3 e1 = VecCP3::Zero();
+				VecCP3 e2 = VecCP3::Zero();
 				for (int m = 0; m < 2; ++m)
 				{
 					JD pmm = m ? -1.0 : 1.0;
 					for (int p = 0; p < GLPN; p++) {
-						Vector3d Jm = pmm * (Jj.col(m * 3 + p) - rwg.points[rwg.vertex_edges[edge_index][m]]);
-						JD inrpr = (spectrum_pre.k_vecs[level_num][row]).dot(Jj.col(m * 3 + p) - point);
+						Vector3d Jm = pmm * (Jj.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[edge_index][m]]);
+						JD inrpr = (spectrum_pre.k_vecs[level_num][row]).dot(Jj.col(m * GLPN + p) - point);
 						JD ct = cos(inrpr), st = sin(inrpr);
 						//Vector3d n_unit = rwg.tri_normal[rwg.edges[edge_index][m]];
 						//Vector3d mc = k_unit[row].normalized().cross(rwgs[rwgs_index].vec_c[k]);
 						//Vector3d mc = 1.0 / Zf * spectrum_pre.k_vecs[level_num][row].normalized().cross(n_unit.cross(Jm));
 						//Vector3cd mj = points[k % GLPN][0] * rwgs[rwgs_index].length * mc * CPD(ct, st);
 						VecCP3 ej = GL_points[p][0] * rwg.edges_length[edge_index] * (Jm) * CP(ct, st);
-						e += ej;// +CPD(0.0, k_unit[0].norm() / (4.0 * pi)) * mj;
+						//VecCP3 eh = GL_points[p][0] * rwg.edges_length[edge_index] * (Jm.cross(n_unit)) * CP(ct, st);
+						e1 += ej;// +CPD(0.0, k_unit[0].norm() / (4.0 * pi)) * mj;
+						//e2 += eh;
 					}
 
 				}
-				aggregation.block(row, j, 1, 1) = spectrum_pre.TCtoS[row].row(0) * e * 0.5;
-				aggregation.block(row + spectrum_num, j, 1, 1) = spectrum_pre.TCtoS[row].row(1) * e * 0.5;
+				//e2 = (spectrum_pre.k_vecs[level_num][row]).cross(e2);
+				aggregation.block(row, j, 1, 1) = spectrum_pre.TCtoS[row].row(0) * 0.5 * e1;
+				aggregation.block(row + spectrum_num, j, 1, 1) = spectrum_pre.TCtoS[row].row(1) * 0.5 * e1;
 			}
 			++edge_index;
 		}
+		mem_sum += aggregation.size();
 		aggregations.push_back(aggregation);
 	}
 	TWIP twip(spectrum_pre.thetas[0], spectrum_pre.thetas[level_num], spectrum_pre.phis_num[0], spectrum_pre.phis_num[level_num]);
@@ -185,8 +240,8 @@ void MatrixPre::GetAggregations()
 	S = twip.Second;
 	aF = twip.First.transpose();
 	aS = twip.Second.transpose();
-
-	if (MPIpre().GetRank() == 0)cout << "Aggregation Done! " << spectrum_pre.thetas_num[level_num] << endl;
+	JD mem_all = mpiout(mem_sum, mpipre);
+	if (MPIpre().GetRank() == 0)cout << "Aggregation Done! " << spectrum_pre.thetas_num[level_num] << " " << MemUsed(mem_all) * 4 << "GB" << endl;
 }
 
 void MatrixPre::AggregationProd(CP* J_ptr, bool judge)
@@ -209,8 +264,8 @@ void MatrixPre::AggregationProd(CP* J_ptr, bool judge)
 			/*if (i == 0) {
 				hhc(0, cube_floor[i].sptmtheta);
 			}*/
-			x.noalias() += CP(0.0, Zf * GlobalParams.k0 / (4.0 * pi)) * (aggregation.topRows(spectrum_num).adjoint() * (aF * (aS * spectrum_theta))
-				+ aggregation.bottomRows(spectrum_num).adjoint() * (aF * (aS * spectrum_phi)));
+			x.noalias() += (decomposes[i].leftCols(spectrum_num) * (aF * (aS * spectrum_theta))
+				+ decomposes[i].rightCols(spectrum_num) * (aF * (aS * spectrum_phi)));
 			//if (i == 0) cout <<"配置后范数："<< x.squaredNorm() << endl;
 		}
 		else {
@@ -320,6 +375,7 @@ void MatrixPre::GetTransfers()
 {
 	int level_num = spectrum_pre.GetTopLevelNum();
 	transfers.reserve(level_num);
+	int mem_sum = 0;
 
 	for (int i = 0; i < level_num; ++i)
 	{
@@ -328,10 +384,12 @@ void MatrixPre::GetTransfers()
 		std::vector<VecCP> transfers_level;
 		std::vector<VecJD3> transfers_D;
 		transfers_level.reserve(316);
-		int L = GetL(spectrum_pre.length * sqrt(3.0) * (1 << i), GlobalParams.k0);
-		int spectrum_num = spectrum_pre.k_vecs[i].size();
+		//int L = GetL(spectrum_pre.length * sqrt(3.0) * (1 << i), GlobalParams.k0);
+		int L = octree.actual_L[i];
+		const int itp_local_st = i == 0 ? 0 : (spectrum_pre.sptm_thetas_st[i] - spectrum_pre.ip_thetas_st[i - 1]) * spectrum_pre.phis_num[i];
+		int spectrum_num = spectrum_pre.GetSptmNumLevel(i);
 		auto& weights = spectrum_pre.weights[i];
-		//cout<< spectrum_num<<"数量 "<<weights.size()<<endl;
+		//if (mpipre.GetRank() >= 0) cout <<mpipre.GetRank() << " " << i << " " << spectrum_num << "数量 " << weights.size() << " " << L << " " << spectrum_pre.k_vecs[i].size() << " " << itp_local_st << endl;
 		for (auto& proxy_cube : proxy_cubes) {
 			for (auto& cube_index : proxy_cube.local_index) {
 				VecJD3 D_vec = octree.mortoncode3d.GetGap2(proxy_cube.mtc, cubes[cube_index].mtc, i);
@@ -354,7 +412,7 @@ void MatrixPre::GetTransfers()
 					if (LL < 30) {
 						for (int k = 0; k < spectrum_num; ++k)
 						{
-							JD kdotD = (spectrum_pre.k_vecs[i][k] / GlobalParams.k0).dot(D_vec / D);
+							JD kdotD = (spectrum_pre.k_vecs[i][k + itp_local_st] / GlobalParams.k0).dot(D_vec / D);
 							CP TL(0, 0);
 							if (kdotD > 1.0) kdotD -= min_eps;
 							if (kdotD < -1.0) kdotD += min_eps;
@@ -372,7 +430,7 @@ void MatrixPre::GetTransfers()
 						}
 						for (int k = 0; k < spectrum_num; ++k)
 						{
-							JD kdotD = (spectrum_pre.k_vecs[i][k] / GlobalParams.k0).dot(D_vec / D);
+							JD kdotD = (spectrum_pre.k_vecs[i][k + itp_local_st] / GlobalParams.k0).dot(D_vec / D);
 							CP TL(0, 0);
 							if (kdotD > 1.0) kdotD -= min_eps;
 							if (kdotD < -1.0) kdotD += min_eps;
@@ -383,6 +441,7 @@ void MatrixPre::GetTransfers()
 					}
 					transfers_level.push_back(transfer);
 					proxy_cube.index.push_back(transfers_level.size() - 1);
+					//if (i == 3) cout << mpipre.GetRank() << " " << transfers_level.size() - 1 << " " << transfer.squaredNorm() << endl;
 				}
 				else {
 					proxy_cube.index.push_back(index);
@@ -390,11 +449,10 @@ void MatrixPre::GetTransfers()
 			}
 		}
 		transfers.push_back(transfers_level);
-		cout << transfers_level.size() << " 转移矩阵数量" << endl;
-		/*for (int j = 0; j < transfers_D.size(); j++) {
-			cout << j << " " << transfers_D[j].norm() / (GlobalParams.lam * 0.251) << " 波长 " << transfers_level[j].squaredNorm() << endl;
-		}*/
+		mem_sum += transfers_level.size() * spectrum_num;
 	}
+	JD mem_all = mpiout(mem_sum, mpipre);
+	if (mpipre.GetRank() == 0) cout << "Transfer done! " << MemUsed(mem_all) * 2 << "GB" << endl;
 }
 
 void MatrixPre::MemPre()
@@ -425,7 +483,7 @@ void MatrixPre::MemPre()
 			//cout << "??" << endl;
 			for (auto& local_cubes_recv_num : octree.far_cubes_recv_num[i]) max_num = max(max_num, size_t(local_cubes_recv_num));
 			int transfer_buffer_num = min(send_buffer_size + recv_buffer_size, transfer_process_num * 2);
-			cout << max_num << " 转移缓冲区数量" << transfer_buffer_num << " " << sptm_num * 2 * max_num * transfer_buffer_num << endl;
+			//cout << max_num << " 转移缓冲区数量" << transfer_buffer_num << " " << sptm_num * 2 * max_num * transfer_buffer_num << endl;
 			mpi_mem_size = max(mpi_mem_size, sptm_num * (cubes.size() + max_num * transfer_buffer_num) * 2);
 		}
 		
@@ -435,7 +493,7 @@ void MatrixPre::MemPre()
 			auto& cubes_fa = octree.GetCubesLevel(i + 1);
 			mpi_mem_size = max(mpi_mem_size, itp_num * cubes_fa.size() * 2);
 		}
-		cout << "内存" << i << " " << mem_size << " " << mpi_mem_size << endl;
+		//cout << "内存" << i << " " << mem_size << " " << mpi_mem_size << endl;
 	}
 	mem_st_ptr = (CP*)malloc(mem_size * sizeof(CP));
 	mem_end_ptr = mem_st_ptr + mem_size;
@@ -450,7 +508,8 @@ void MatrixPre::MemPre()
 	}
 	mpi_mem_st_ptr = (CP*)malloc(mpi_mem_size * sizeof(CP));
 	mpi_mem_end_ptr = mpi_mem_st_ptr + mpi_mem_size;
-	cout << "分配内存成功 " << JD(mem_size + mpi_mem_size) * 16.0 / 1024.0 / 1024.0 / 1024.0 << " GB" << " " << mpi_mem_size << endl;
+	JD mem_all = mpiout(JD(mem_size + mpi_mem_size), mpipre);
+	if (mpipre.GetRank() == 0)cout << "分配波谱内存成功 " << MemUsed(mem_all) * 2 << " GB" << " " << MemUsed(mem_size + mpi_mem_size) << endl;
 }
 
 void MatrixPre::InterpolationProd(bool judge)
@@ -462,7 +521,6 @@ void MatrixPre::InterpolationProd(bool judge)
 		auto& cubes_fa = octree.GetCubesLevel(level + 1);
 		auto& cubes_son = octree.GetCubesLevel(level);
 		auto& proxy_cubes = octree.GetProxyCubesLevel(level);
-		auto& local_cubes_sent = octree.local_cubes_sent[level];
 
 		int Itp_theta_st = spectrum_pre.ip_thetas_st[level], Itp_theta_end = spectrum_pre.ip_thetas_end[level];
 		int fa_phi_num = spectrum_pre.phis_num[level + 1], son_phi_num = spectrum_pre.phis_num[level];
@@ -645,13 +703,13 @@ void MatrixPre::InterpolationProd(bool judge)
 					if (son_theta_st != 0) {
 						MPI_Wait(&request_s[2], MPI_STATUS_IGNORE);
 						itp_sptm.topRows(Itp_num).noalias() += phase_shift.cwiseProduct(S * (Fu * sptm_recv_up.topRows(TWIP::p * son_phi_num)));
-						itp_sptm.bottomRows(Itp_num).noalias() += phase_shift.cwiseProduct(S * (Fu * sptm_recv_up.topRows(TWIP::p * son_phi_num)));
+						itp_sptm.bottomRows(Itp_num).noalias() += phase_shift.cwiseProduct(S * (Fu * sptm_recv_up.bottomRows(TWIP::p * son_phi_num)));
 					}
 
 					if (son_theta_end != spectrum_pre.thetas_num[level]) {
 						MPI_Wait(&request_s[3], MPI_STATUS_IGNORE);
 						itp_sptm.topRows(Itp_num).noalias() += phase_shift.cwiseProduct(S * (Fd * sptm_recv_down.topRows(TWIP::p * son_phi_num)));
-						itp_sptm.bottomRows(Itp_num).noalias() += phase_shift.cwiseProduct(S * (Fd * sptm_recv_down.topRows(TWIP::p * son_phi_num)));
+						itp_sptm.bottomRows(Itp_num).noalias() += phase_shift.cwiseProduct(S * (Fd * sptm_recv_down.bottomRows(TWIP::p * son_phi_num)));
 					}
 					if (son_theta_st != 0) MPI_Wait(&request_s[0], MPI_STATUS_IGNORE);
 					if (son_theta_end != spectrum_pre.thetas_num[level]) MPI_Wait(&request_s[1], MPI_STATUS_IGNORE);
@@ -679,6 +737,14 @@ void MatrixPre::InterpolationProd(bool judge)
 					//cout << mpipre.GetRank() << "?????" << endl;
 				}
 				else sptm_fa.noalias() = itp_sptm;
+				/*if(level==2)
+				{
+					JD sum = sptm_fa.topRows(fa_sptm_num).squaredNorm();
+					JD all_sum = 0;
+					MPI_Reduce(&sum, &all_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+					if (mpipre.GetRank() == 0) cout << level << "  " << j << " 父亲总范数 " << all_sum << endl;
+					if(mpipre.GetSize()>1) cout << mpipre.GetRank() << " 本地范数 " << sptm_fa.squaredNorm() << endl;
+				}*/
 			}
 			//cout<<mpipre.GetRank()<<" ???"<<endl;
 			Map<VectorXcd> sptm_fa(cubes_fa[0].sptmtheta, cubes_fa.size() * 2 * fa_sptm_num);
@@ -700,6 +766,7 @@ void MatrixPre::InterpolationProd(bool judge)
 				for (int k = 0; k < cluster_num; k++) MPI_Wait(&request[k], MPI_STATUS_IGNORE);*/
 			}
 			else if (exchange_num) {
+				//if(mpipre.GetRank() == 0)cout<<level<<" ???"<<endl;
 				MPI_Sendrecv(mpi_mem_st_ptr + cubes_fa.size() * fa_sptm_num * 2, cubes_fa.size() * exchange_num * 2, MPI_DOUBLE_COMPLEX, mpipre.GetRankExchange(level), 0,
 					sptm_fa.data(), cubes_fa.size() * 2 * fa_sptm_num, MPI_DOUBLE_COMPLEX, mpipre.GetRankExchange(level), 0,
 					MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -710,14 +777,53 @@ void MatrixPre::InterpolationProd(bool judge)
 				Map<VectorXcd> sptm(mpi_mem_st_ptr, cubes_fa.size() * 2 * fa_sptm_num);
 				sptm_fa.noalias() = sptm;
 			}
-			for (int j = 0; j < 4; ++j) MPI_Request_free(&request_s[j]);
-			//cout << "????" << endl;
-			StartTransfer(level);
 			
+			/*if (mpipre.GetSize() == 2 && level == 2) {
+				cout << level << " 部分范数 " << sptm_fa.topRows(fa_sptm_num).squaredNorm() << " " << fa_sptm_num << endl;
+			}
+			if (mpipre.GetSize() == 1 && level == 2) {
+				cout << level << " 部分范数 " << sptm_fa.topRows(fa_sptm_num).topRows(1156).squaredNorm() << " " << sptm_fa.topRows(fa_sptm_num).bottomRows(1088).squaredNorm() << " "<<fa_sptm_num << endl;
+			}*/
+			for (int j = 0; j < 4; ++j) MPI_Request_free(&request_s[j]);
+			/*{
+				Map<VecCP> sptm_son(cubes_son[0].sptmtheta, sptm_son_num * 2 * cubes_son.size());
+				JD sum = sptm_son.squaredNorm();
+				JD all_sum = 0;
+				MPI_Reduce(&sum, &all_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+				if (mpipre.GetRank() == 0) cout <<level<< " 总范数 " << all_sum << endl;
+				
+			}*/
+			StartTransfer(level);
+			/*{
+				Map<VecCP> sptm_son(cubes_son[0].sptmtheta, sptm_son_num * 2 * cubes_son.size());
+				JD sum = sptm_son.squaredNorm();
+				JD all_sum = 0;
+				MPI_Reduce(&sum, &all_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+				if (mpipre.GetRank() == 0) cout << " 总范数 " << all_sum << endl;
+			}*/
 		}
 	}
 	//cout << "st" << endl;
-	if(!judge) StartTransfer(level_num - 1);
+	if (!judge) {
+		/*{
+			auto& cubes_son = octree.GetCubesLevel(level_num - 1);
+			int sptm_son_num = spectrum_pre.GetSptmNumLevel(level_num - 1);
+			Map<VecCP> sptm_son(cubes_son[0].sptmtheta, sptm_son_num * 2 * cubes_son.size());
+			JD sum = sptm_son.squaredNorm();
+			JD all_sum = 0;
+			MPI_Reduce(&sum, &all_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+			if (mpipre.GetRank() == 0) cout << level_num - 1 << " 总范数 " << all_sum << endl;
+		}*/
+		
+		StartTransfer(level_num - 1);
+		/*auto& cubes_son = octree.GetCubesLevel(level_num - 1);
+		int sptm_son_num = spectrum_pre.GetSptmNumLevel(level_num - 1);
+		Map<VecCP> sptm_son(cubes_son[0].sptmtheta, sptm_son_num * 2 * cubes_son.size());
+		JD sum = sptm_son.squaredNorm();
+		JD all_sum = 0;
+		MPI_Reduce(&sum, &all_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+		if (mpipre.GetRank() == 0) cout << " 总范数 " << all_sum << endl;*/
+	}
 }
 
 void MatrixPre::StartTransfer(const int level)
@@ -726,7 +832,7 @@ void MatrixPre::StartTransfer(const int level)
 	auto& cubes = octree.GetCubesLevel(level);
 	std::vector<int>& transfer_process = mpipre.GetTransferProcess(level);
 	int m0 = lower_bound(transfer_process.begin(), transfer_process.end(), mpipre.GetRank()) - transfer_process.begin();
-	//cout << "m0=" << m0 << endl;
+	//cout << mpipre.GetRank() << " m0=" << m0 << " " << level << " "<< transfer_process.size()<< endl;
 	int process_num = transfer_process.size();
 	//将本地波谱转移给发送数组
 	CP* const transfer_send_st = mpi_mem_st_ptr + sptm_num * 2 * cubes.size();
@@ -752,22 +858,26 @@ void MatrixPre::StartTransfer(const int level)
 		//cout << "?" << endl;
 		CP* send_st = transfer_send_st;
 		CP* recv_st = transfer_recv_st;
+		//cout<<mpipre.GetRank()<<"  "<< send_num <<" "<< request_send.size()<<endl;
 		while (send_num < process_num && request_send.size() < send_buffer_size) {
 			int send_index = (send_num + m0 + 1) % process_num;
 			int send_rank = transfer_process[send_index];
 			auto& cubes_index = send_cubes_index[send_index];
-			//cout << "发送给其他进程的盒子数量：" << cubes_index.size() << " " << send_rank << " " << sptm_num * 2 * cubes_index.size() << endl;
-			if (cubes_index.size() == 0) continue;
+			//cout <<mpipre.GetRank() << "发送给其他进程的盒子数量：" << cubes_index.size() << " " << send_rank << " " << sptm_num * 2 * cubes_index.size() << endl;
+			if (cubes_index.size() == 0) {
+				++send_num;
+				continue;
+			}
 			for (int j = 0; j < cubes_index.size(); j++) {
 				Map<VecCP> sptm_send(send_st + sptm_num * 2 * j, sptm_num * 2);
 				Map<VecCP> sptm_cube(mpi_mem_st_ptr + sptm_num * 2 * cubes_index[j], sptm_num * 2);
 				//cout << j <<endl;
 				sptm_send = sptm_cube;
 			}
-			/*Map<VecCP> sss(send_st, sptm_num * 2 * cubes_index.size());
-			cout << "发送范数：" << sss.squaredNorm() << endl;*/
+			Map<VecCP> sss(send_st, sptm_num * 2 * cubes_index.size());
+			//cout <<mpipre.GetRank() << " 发送范数：" << sss.squaredNorm() << endl;
 			request_send.push(MPI_Request());
-			//cout << send_rank << "发 " << cubes_index.size() << " "<< sptm_num * 2 * cubes_index.size()<<endl;
+			//cout <<mpipre.GetRank() << "  " <<send_rank << "发 " << cubes_index.size() << " "<< sptm_num * 2 * cubes_index.size()<<endl;
 			MPI_Isend(send_st, sptm_num * 2 * cubes_index.size(), MPI_DOUBLE_COMPLEX, send_rank, cubes_index.size(), MPI_COMM_WORLD, &request_send.back());
 			send_st += transfer_buffer;
 			++send_num;
@@ -775,23 +885,32 @@ void MatrixPre::StartTransfer(const int level)
 		//cout << "??" << endl;
 		while (request_recv.size() < recv_buffer_size && recv_num < process_num) {
 			int recv_index = (m0 - recv_num - 1 + process_num) % process_num;
-			if (recv_cubes_num[recv_index] == 0) continue;
+			int recv_rank = transfer_process[recv_index];
+			if (recv_cubes_num[recv_rank] == 0) {
+				++recv_num;
+				continue;
+			}
 			request_recv.push(MPI_Request());
-			//cout << transfer_process[recv_index] << "接 " << recv_cubes_num[recv_index] << " " << transfer_buffer << endl;
-			MPI_Irecv(recv_st, transfer_buffer, MPI_DOUBLE_COMPLEX, transfer_process[recv_index], recv_cubes_num[recv_index], MPI_COMM_WORLD, &request_recv.back());
+			//cout <<mpipre.GetRank() << "  " << recv_rank << "接 " << recv_cubes_num[recv_rank] << " " << transfer_buffer << endl;
+			MPI_Irecv(recv_st, transfer_buffer, MPI_DOUBLE_COMPLEX, recv_rank, recv_cubes_num[recv_rank], MPI_COMM_WORLD, &request_recv.back());
 			recv_st += transfer_buffer;
 			++recv_num;
 		}
 		//cout << "???" << " "<< request_recv.empty()<<endl;
 		recv_st = transfer_recv_st;
 		MPI_Status status;
+		//if (level == 2 && mpipre.GetRank() == 1)cout << "gg??? " << request_recv.empty()<< endl;
 		while (!request_recv.empty()) {
+			//if (level == 2 && mpipre.GetRank() == 1)cout << "????? " << request_recv.empty() << endl;
 			MPI_Wait(&request_recv.front(), &status);
+			//if (level == 2 && mpipre.GetRank() == 1)cout << "?????? " << request_recv.empty() << endl;
 			int source_rank = status.MPI_SOURCE;
-			int st = octree.far_cubes_process_index[level][source_rank], ed = proxy_cubes.size();
-			/*Map<VecCP> rrr(recv_st, recv_cubes_num[source_rank] * sptm_num * 2);
-			cout << "收到来自" << source_rank << "的" << recv_cubes_num[source_rank] << "个盒子 " << rrr.squaredNorm() <<endl;*/
-			for (int i = st; i < ed && proxy_cubes[i].process_index == source_rank; ++i) {
+			//if (level == 2 && mpipre.GetRank() == 1)cout << "? " << octree.far_cubes_process_index[level].size() << endl;
+			int st = octree.far_cubes_process_index[level][source_rank], ed = octree.far_cubes_process_index[level][source_rank + 1];
+			//if (level == 2 && mpipre.GetRank() == 1)cout << "???????? " << request_recv.empty() << endl;
+			Map<VecCP> rrr(recv_st, recv_cubes_num[source_rank] * sptm_num * 2);
+			//cout << mpipre.GetRank() << "收到来自" << source_rank << "的" << recv_cubes_num[source_rank] << "个盒子 " << rrr.squaredNorm() <<endl;
+			for (int i = st; i < ed ; ++i) {
 				//cout << "需要被转移的本地盒子数量：" << proxy_cubes[i].local_index.size() << endl;
 				Map<VecCP> sptm_recv(recv_st + sptm_num * 2 * (i - st), sptm_num * 2);
 				for (int j = 0; j < proxy_cubes[i].local_index.size(); j++) {
@@ -802,10 +921,10 @@ void MatrixPre::StartTransfer(const int level)
 					//cout << sptm_cube.size() << endl;
 					//cout << sptm_recv.size() << endl;
 					//cout << transfers[level][transfer_index].size() << endl;
-					//if (i == st) cout << sptm_cube.squaredNorm() << "转移范数测试 " << sptm_recv.squaredNorm() << " " << transfers[level][transfer_index].squaredNorm() << endl;
+					//if (i == st) cout <<mpipre.GetRank()<<" "<< sptm_cube.squaredNorm() << "转移范数测试 " << sptm_recv.squaredNorm() << " " << transfers[level][transfer_index].squaredNorm() << " " << transfer_index << endl;
 					sptm_cube.topRows(sptm_num).noalias() += sptm_recv.topRows(sptm_num).cwiseProduct(transfers[level][transfer_index]);
 					sptm_cube.bottomRows(sptm_num).noalias() += sptm_recv.bottomRows(sptm_num).cwiseProduct(transfers[level][transfer_index]);
-					//if(local_cube_index ==0) cout << "转移后范数" << i << " " << sptm_cube.squaredNorm() << endl;
+					//if(i == st) cout << "转移后范数" << i << " " << sptm_cube.squaredNorm() << endl;
 					/*if (((i == 55 && level == 1) || (i == 204 && level == 0)) && local_cube_index == 0) {
 						hhc(level, sptm_cube.data());
 					}*/
@@ -814,8 +933,11 @@ void MatrixPre::StartTransfer(const int level)
 			recv_st += transfer_buffer;
 			request_recv.pop();
 		}
-		//cout << "????" << endl;
-		while (!request_send.empty() && MPI_Wait(&request_send.front(), MPI_STATUS_IGNORE)) request_send.pop();
+		//cout << mpipre.GetRank() << " ???? " << endl;
+		while (!request_send.empty()) {
+			MPI_Wait(&request_send.front(), MPI_STATUS_IGNORE);
+			request_send.pop();
+		}
 	}
 	//cout << "转移后范数" << level << " " << cubes_sptm.squaredNorm() << endl;
 }
@@ -841,13 +963,13 @@ Eigen::Vector2cd MatrixPre::GetRwgEFarField(const JD theta, const JD phi, const 
 		//遍历每一个方向（行）
 		for (auto j = 0; j < cube_rwgs_num; ++j)
 		{
-			const Eigen::Matrix<JD, 3, 6>& Jj = rwg.J_GL[edge_index];
+			const Eigen::Matrix<JD, 3, GLPN2>& Jj = rwg.J_GL[edge_index];
 			Vector3cd e = Vector3cd::Zero();
 			for (auto m = 0; m < 2; ++m) {
 				double pmm = m ? -1 : 1;
 				for (int p = 0; p < GLPN; ++p) {
-					Vector3d Jm = pmm * (Jj.col(m * 3 + p) - rwg.points[rwg.vertex_edges[edge_index][m]]);
-					JD inrpr = r_unit.dot(Jj.col(m * 3 + p));
+					Vector3d Jm = pmm * (Jj.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[edge_index][m]]);
+					JD inrpr = r_unit.dot(Jj.col(m * GLPN + p));
 					JD ct = cos(GlobalParams.k0 * inrpr), st = sin(GlobalParams.k0 * inrpr);
 					//Vector3d n_unit = rwg.tri_normal[rwg.edges[edge_index][m]];
 					//Vector3d mc = 1.0 / Zf * r_unit.normalized().cross(n_unit.cross(Jm));
@@ -893,11 +1015,11 @@ Eigen::Vector3cd MatrixPre::GetRwgENearField(const VecJD3 r, const Eigen::Vector
 	//cout <<"数量："<< rwg_index.size() << endl;
 	//for(int i=0;i<rwg.edges.size();++i)
 	for (auto& i : rwg_index) {
-		const Eigen::Matrix<JD, 3, 6>& Ji = rwg.J_GL[i];
+		const Eigen::Matrix<JD, 3, GLPN2>& Ji = rwg.J_GL[i];
 		for (int m = 0; m < 2; ++m) {
 			double pmm = m ? -1 : 1;
 			for (int p = 0; p < GLPN; ++p) {
-				VecJD3 Jm = pmm * (Ji.col(m * 3 + p) - rwg.points[rwg.vertex_edges[i][m]]);
+				VecJD3 Jm = pmm * (Ji.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[i][m]]);
 				CP jx = Jm[0], jy = Jm[1], jz = Jm[2];
 				VecJD3 R_v = r - rwg.points[rwg.vertex_edges[i][m]];
 				JD R = R_v.norm();

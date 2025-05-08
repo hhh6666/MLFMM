@@ -16,7 +16,8 @@ void SpectrumPre::Get_Spectrum()
 	ip_thetas_st.reserve(level_num - 1);
 	ip_thetas_end.reserve(level_num - 1);
 	for (int i = 0; i < level_num; ++i) {
-		int L = GetL(length * JD(1 << i) * sqrt(3.0), GlobalParams.k0);
+		//int L = GetL(length * JD(1 << i) * sqrt(3.0), GlobalParams.k0);
+		int L = actual_L[i];
 		int theta_num = GetThetaNum(L);//1.5, 
 		int phi_num = GetPhiNum(L);
 
@@ -78,7 +79,8 @@ void SpectrumPre::Get_Spectrum()
 		//cout << i << "数量 " << k_unit.size() << endl;
 	}
 
-	int L = GetLH(length * sqrt(3.0), GlobalParams.k0);
+	//int L = GetLH(length * sqrt(3.0), GlobalParams.k0);
+	int L = actual_L[level_num];
 	int theta_num = GetThetaNum(L);
 	int phi_num = GetPhiNum(L);
 	if (mpipre.GetRank() == 0) cout << "theta数量" << theta_num << endl;

@@ -4,13 +4,14 @@ using namespace Eigen;
 
 void MLFMM::GmresP(const Eigen::VectorXcd& b, Eigen::VectorXcd& J)
 {
-	if (mpipre.GetRank() == 0) cout << "Start iterating" << endl;
+	if (mpipre.GetRank() == 0) cout << "Start iterating " << b.squaredNorm() << endl;
 	VectorXcd b_pre(b.rows());
 	matrix_pre.SelfProd(b, b_pre.data());
 	/*J = b_pre;
 	cout << "µçÁ÷·¶Êý" << b_pre.squaredNorm() << endl;
 	return;*/
-	cout << b_pre.squaredNorm() << endl;
+	mpiout(b_pre.squaredNorm(), mpipre);
+	//cout << b_pre.squaredNorm() << endl;
 	clock_t start, end;
 	start = clock();
 	J.setZero();
@@ -21,7 +22,7 @@ void MLFMM::GmresP(const Eigen::VectorXcd& b, Eigen::VectorXcd& J)
 	//cout << mpipre.GetRank() << "Zb_norm" << Zb_norm << endl;
 	b_norm = sqrt(b_norm);
 	size_t restart_num = 1;
-	size_t iterations_max = 500;
+	size_t iterations_max = 120;
 	size_t lieshu = J.rows();
 	JD threshold = 2e-3;
 	Eigen::VectorXcd Hk = Eigen::VectorXcd::Zero(iterations_max);

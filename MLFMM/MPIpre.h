@@ -79,4 +79,11 @@ public:
 	int GetRank()const{return rank;}
 };
 
+inline double mpiout(double sum, MPIpre& mpipre) {
+	double my_norm = sum;
+	double sum_level_all = 0;
+	MPI_Reduce(&my_norm, &sum_level_all, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+	return sum_level_all;
+}
+
 #endif

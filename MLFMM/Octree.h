@@ -134,8 +134,10 @@ public:
 		this->Fillcubes();
 		this->GetNear();
 		this->change_rwgs();
+		
 		rwg.initial();
 	};
+	std::vector<int> actual_L;
 	MortonCode3D mortoncode3d;
 	std::vector<Cube>& GetCubesLevel(int level_index) { return cubes[level_index]; }
 	std::vector<ProxyCube>& GetProxyCubesLevel(int level_index) { return proxy_cubes[level_index]; }
@@ -146,12 +148,13 @@ public:
 	std::vector<int> cube_rwgs_dif;//所有盒子（包括本地和代理盒子）的相对位置，代理盒子再在本地盒子后面
 	std::vector<int> near_cube_rwgs_num;//每一个近代理中的基函数个数
 	std::vector<int> near_cubes_process_index;//记录每一个进程对应的进代理盒子的起始位置
-	std::vector<int> near_cubes_recv_num;
+	std::vector<int> near_cubes_recv_num;//从m0进程接收的基函数数量
 	std::vector<std::vector<int>> far_cubes_process_index;//记录远代理盒子每一个进程的起始位置
 	std::vector<std::vector<std::vector<int>> > local_cubes_sent;
 	std::vector<NearProxyCube> near_cubes;//代理盒子（用于近邻）
 	std::vector<std::vector<int>> near_cubes_sent;//需要给第j个进程发送的本地盒子编号
 	std::vector<std::vector<int>> far_cubes_recv_num;
+	const int local_rwgs_num()const { return cube_rwgs_dif[cubes[0].size()]; }
 };
 
 

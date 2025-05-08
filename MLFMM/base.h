@@ -32,6 +32,7 @@ const JD min_eps = std::numeric_limits<JD>::epsilon() * 3;
 inline int GetLH(const JD D, const JD k) { return k * D / 2 + 1.8 * pow(log(1.0 / 0.01), 2.0 / 3.0) * pow(k * D / 2, 1.0 / 3.0); }
 inline int GetL(const JD D, const JD k) {return k * D + 1.8 * pow(log(1.0 / 0.02), 2.0 / 3.0) * pow(k * D, 1.0 / 3.0);}
 inline int GetN(const JD D, const JD k) { return 2 * int(k * D * 0.5 + 10) + 2; }
+inline JD MemUsed(JD mem) { return mem * sizeof(mem) / 1024.0 / 1024.0 / 1024.0; }
 
 
 inline CP Get_hankel2(int n, JD kd, CP hn_1, CP hn_2)

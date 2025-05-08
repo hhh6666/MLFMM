@@ -54,7 +54,7 @@ void MPIpre::GetProcessOrder()
 			process.push_back(process_now);
 			int b = rank_index % cluster_size;//进程在当前进程组第几个进程，不用单独考虑BP层
 			for (int i = 0; i < size / cluster_size; i++) {
-				plane_wave_now[i] = b + i * cluster_size;
+				plane_wave_now[i] = process_now[b + i * cluster_size];
 			}
 			sort(plane_wave_now.begin(), plane_wave_now.end());
 			transfers_index.push_back(plane_wave_now);
