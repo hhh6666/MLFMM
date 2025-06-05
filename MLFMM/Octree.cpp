@@ -7,8 +7,8 @@ size_t MortonCode1D::GetMortonCode(const JD& point) const
 {
 	size_t mortoncode = 0;
 	JD l = start_point, r = end_point;
-	while (r - l > length + 1e-7) {
-		JD m = (l + r) / 2;
+	while (r > length + l+min_eps) {
+		JD m = (l + r) * JD(0.5);
 		if (point < m) {
 			mortoncode <<= 1;
 			r = m;
@@ -77,17 +77,17 @@ VecJD3 MortonCode3D::GetPoint(size_t morton_code, int level_index) const
 	int a = mortoncode1d[0].level_num, b = mortoncode1d[1].level_num, c = mortoncode1d[2].level_num;
 	for (int i = level_index; i < a; ++i) {
 		int j = i - level_index;
-		gap[0] += ((morton_code >> (3 * j) & 1) ? 1 : -1) * (1 << i);
+		gap[0] += ((morton_code >> (3 * j) & 1) ? JD(1.0) : -JD(1.0)) * JD(1 << i);
 	}
 	for (int i = level_index; i < b; ++i) {
 		int j = i - level_index;
-		gap[1] += ((morton_code >> (3 * j + 1) & 1) ? 1 : -1) * (1 << i);
+		gap[1] += ((morton_code >> (3 * j + 1) & 1) ? JD(1.0) : -JD(1.0)) * JD(1 << i);
 	}
 	for (int i = level_index; i < c; ++i) {
 		int j = i - level_index;
-		gap[2] += ((morton_code >> (3 * j + 2) & 1) ? 1 : -1) * (1 << i);
+		gap[2] += ((morton_code >> (3 * j + 2) & 1) ? JD(1.0) : -JD(1.0)) * JD(1 << i);
 	}
-	return centre + gap * length / 2;
+	return centre + gap * length * JD(0.5);
 }
 
 VecJD3 MortonCode3D::GetGap(size_t morton_code, int level_index) const
@@ -98,7 +98,7 @@ VecJD3 MortonCode3D::GetGap(size_t morton_code, int level_index) const
 	if (level_index < b) gap[1] = ((morton_code & 2) ? -1 : 1) * (1 << level_index);
 	if (level_index < c) gap[2] = ((morton_code & 4) ? -1 : 1) * (1 << level_index);
 	
-	return gap * mortoncode1d[0].length / 2;
+	return gap * mortoncode1d[0].length * JD(0.5);
 }
 
 VecJD3 MortonCode3D::GetGap2(size_t mtc1, size_t mtc2, int level_index) const
@@ -121,12 +121,13 @@ void OctreeRWG::Fillcubes()
 	const int& level_num = mortoncode3d.GetLevelNum();
 	actual_L.resize(level_num + 1, 0);
 	//return;
-	if (mpipre.GetRank() == 0) cout << mpipre.GetRank() << " 层数 " << level_num << endl;
+	if (mpipre.GetRank() == 0) cout << mpipre.GetRank() << " 层数 " << level_num << " " << endl;
 	std::vector<std::vector<Cube> > full_cubes(level_num);
 	std::vector<std::unordered_map<size_t, int> > childs_num(level_num);//莫顿码儿子数量
 	std::vector<std::unordered_map<size_t, bool> > have_parent(level_num);
 	cout << (old_rwg_ptr->edges).size() << endl;
 	//获得完整八叉树
+	std::vector<JD> max_length(level_num, 0);
 	for (int i = 0; i < (old_rwg_ptr->edges).size(); ++i)
 	{
 		const VecJD3& point = old_rwg_ptr->GetEdgeCenter(i);
@@ -145,16 +146,19 @@ void OctreeRWG::Fillcubes()
 				have_parent[j - 1][mortoncode >> ((j - 1) * 3)] = 1;
 			}
 			VecJD3 center_point = mortoncode3d.GetPoint(mtc_now, j);
-			int L = GetL((point - center_point).norm() * 2, GlobalParams.k0);
-			actual_L[j] = std::max(actual_L[j], L);
-			if (j == 0) {
-				int LH = GetLH((point - center_point).norm() * 2, GlobalParams.k0);
-				actual_L[level_num] = std::max(actual_L[level_num], LH);
-			}
+			max_length[j] = std::max(max_length[j], (point - center_point).norm() * JD(2.0));
+			/*if ((point - center_point).norm() * JD(2.0) > length * sqrt(3.0)&&j==0&&i<100) {
+				cout<< (mtc_now&7) << endl;
+			}*/
 		}
-		
 	}
-	if (mpipre.GetRank() == 0) cout << "完整八叉树构建完成" << endl;
+	for (int i = 0; i < level_num; i++) actual_L[i] = GetL(max_length[i], GlobalParams.k0);
+	//for (int i = 0; i < level_num; i++) actual_L[i] = GetL(length*sqrt(JD(3.0))*(1<<i), GlobalParams.k0);
+	actual_L[level_num] = GetLH(max_length[0], GlobalParams.k0);
+	if (mpipre.GetRank() == 0) {
+		cout << "完整八叉树构建完成" << endl;
+		for (int i = 0; i < level_num; i++)cout << actual_L[i] << " " << max_length[i] / GlobalParams.lam <<endl;
+	}
 	//排序
 	cubes.reserve(level_num);
 	for (int i = 0; i < level_num; i++) {
@@ -253,7 +257,7 @@ void OctreeRWG::Fillcubes()
 			}
 		}
 	}*/
-
+	//for (int i = 0; i < 10; i++) i--;
 	//确定近邻次近邻
 	for (int i = 0; i < level_num - 1; i++) {
 		if (i == 0) {
@@ -299,17 +303,19 @@ void OctreeRWG::Fillcubes()
 				else {
 					ProxyCube proxy_cube;
 					proxy_cube.mtc = mtc_nb;
-					proxy_cube.local_index.reserve(50);
+					proxy_cube.local_index.reserve(250);
 					proxy_cube.local_index.push_back(j);
 					proxy_cubes_level.push_back(proxy_cube);
 					far_map[mtc_nb] = proxy_cubes_level.size();
 				}
 			}
 		}
+		for (auto& proxy_cube : proxy_cubes_level) proxy_cube.local_index.shrink_to_fit();
 		proxy_cubes_level.shrink_to_fit();
 		proxy_cubes.push_back(proxy_cubes_level);
 	}
 	if(mpipre.GetRank() == 0)cout << mpipre.GetRank() << "近邻确定完成 " << near_cubes.size() << " " << cubes[0].size() << endl;
+	
 }
 
 void OctreeRWG::Greedy(std::vector<Cube>& cubes_level, std::vector<CubeWieght>& cube_weights, std::vector<Cube>& cubes_level_new
@@ -505,6 +511,7 @@ void OctreeRWG::change_rwgs()
 	vector<vector<int>> cube_rwgs_index(cubes[0].size()+ near_cubes.size());
 	int sum3 = 0;
 	//cout << mpipre.GetRank() << " ? " << edges_num << endl;
+	//遍历所有的基函数，将属于当前进程的基函数编号提取出来
 	for (int i = 0; i < edges_num; i++) {
 		const VecJD3& point = old_rwg_ptr->GetEdgeCenter(i);
 		size_t mtc = mortoncode3d.GetMortonCode(point);
@@ -515,6 +522,7 @@ void OctreeRWG::change_rwgs()
 			++cube_rwgs_num[m0];
 			++sum1;
 		}
+		//当前进程的近代理盒子所属的基函数也需要提取出来
 		for (int j = 0; j < mpipre.GetSize(); ++j) {
 			auto st = near_cubes.begin() + near_cubes_process_index[j];
 			auto ed = near_cubes.begin() + near_cubes_process_index[j + 1];
@@ -557,7 +565,7 @@ void OctreeRWG::change_rwgs()
 	rwg.triangles.reserve((sum1 + sum2) / 1.5);
 	unordered_map<int, int> point_map{};
 	unordered_map<int, int> triangle_map{};
-
+	//将当前进程的基函数提取出来
 	for (auto& cube_index : cube_rwgs_index) {
 		for (auto& rwg_index : cube_index) {
 			rwg.edges.push_back(old_rwgs.edges[rwg_index]);
@@ -603,21 +611,21 @@ void OctreeRWG::Fillb(JD theta, JD phi)
 	}
 
 	//JD ct = cos(theta * rad), st = sin(theta * rad), cp = cos(phi * rad), sp = sin(phi * rad);
-	//Vector3d r = Vector3d(st * cp, st * sp, ct);//方向相反
+	//VecJD3 r = VecJD3(st * cp, st * sp, ct);//方向相反
 	//int size = local_rwgs_num();
 	//b.setZero(size);
 	//MatrixXd T(2, 3);
 	//T << ct * cp, ct* sp, -st,
 	//	-sp, cp, 0;
 	////T.transposeInPlace();
-	//Vector2d polor{ -1.0,0.0 };
-	//Vector3d plane_wave = T.transpose() * polor;
+	//Eigen::Vector<JD, 2> polor{ -1.0,0.0 };
+	//VecJD3 plane_wave = T.transpose() * polor;
 	//for (int i = 0; i < size; i++) {
 	//	Eigen::Matrix<JD, 3, GLPN2>& Ji = rwg.J_GL[i];
 	//	for (int m = 0; m < 2; ++m) {
 	//		JD pmm = m ? -1.0 : 1.0;
 	//		for (int p = 0; p < GLPN; ++p) {
-	//			Vector3d Jm = pmm * (Ji.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[i][m]]);
+	//			VecJD3 Jm = pmm * (Ji.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[i][m]]);
 	//			JD rpr = GlobalParams.k0 * Ji.col(m * GLPN + p).dot(r);
 	//			CP ejkr = CP(cos(rpr), sin(rpr));
 	//			b[i] += GL_points[p][0] * Jm.dot(plane_wave) * ejkr;

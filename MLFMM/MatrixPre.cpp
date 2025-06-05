@@ -8,9 +8,11 @@ void MatrixPre::GetNearNb()
 	
 	std::vector<Cube>& cube_floor = octree.GetCubesLevel(0);
 	auto& near_cubes = octree.near_cubes;
-	JD norm_sum = 0;
+	JD mem_sum = 0;
+	JD norm_sum1 = 0, norm_sum2 = 0;
 	//cout<<mpipre.GetRank()<<"开始填充近作用矩阵 "<< cube_floor.size() <<endl;
 	Zinv_list.reserve(cube_floor.size());
+	self_matrix.reserve(cube_floor.size());
 	for (int i = 0; i < cube_floor.size(); i++) {
 		int st = octree.cube_rwgs_dif[i], ed = st + octree.cube_rwgs_num[i], size = octree.cube_rwgs_num[i];
 		//cout << i << " " << st << " " << ed << endl;
@@ -18,13 +20,20 @@ void MatrixPre::GetNearNb()
 		for (int k = 0; k < size; k++) {
 			for (int j = k; j < size; j++) {
 				Zs(j, k) = octree.rwg.GetZij(j + st, k + st);
+				/*if (mpipre.GetRank() == 0 && i==11257&&isnan(abs(Zs(j, k)))) {
+					cout << j + st << "h  " << k + st << "  " << Zs(j, k) << endl;
+				}*/
 				Zs(k, j) = Zs(j, k);
 			}
 		}
 		Eigen::PartialPivLU<MatCP> Zinv(Zs);
-		//cout <<"矩阵范数"<< Zs.squaredNorm() << endl;
-		norm_sum += size * size;
 		Zinv_list.push_back(Zinv);
+		//self_matrix.push_back(Zs);
+		//if (isnan(Zs.squaredNorm()))cout << mpipre.GetRank() << " 矩阵范数 " << Zs.squaredNorm() << " " << i << endl;
+		norm_sum1 += Zs.squaredNorm();
+	
+		mem_sum += size * size;
+		
 	}
 
 	int matrix_size = 0;
@@ -56,15 +65,17 @@ void MatrixPre::GetNearNb()
 				}
 			}
 			near_matrix_list.push_back(Zn);
-			norm_sum += Zn.size();
+			norm_sum2 += Zn.squaredNorm();
+			mem_sum += Zn.size();
 			near_cubes[k].index.push_back(near_matrix_list.size() - 1);
 		}
 		proxy_rwgs_st += near_cubes[k].process_index == mpipre.GetRank() ? 0 : octree.near_cube_rwgs_num[k];
 	}
+	//cout <<mpipre.GetRank()<< " 近作用矩阵范数：" << norm_sum1 << " " << norm_sum2 << endl;
 	/*JD all_sum = 0;
-	MPI_Reduce(&norm_sum, &all_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+	MPI_Reduce(&norm_sum, &all_sum, 1, MPI_JD, MPI_SUM, 0, MPI_COMM_WORLD);
 	if(mpipre.GetRank() == 0) cout <<"总范数"<< norm_sum << endl;*/
-	JD mem_all = mpiout(norm_sum, mpipre);
+	JD mem_all = mpiout(mem_sum, mpipre);
 	if (mpipre.GetRank() == 0)cout << mpipre.GetRank() << "近作用矩阵填充完成 " << near_matrix_list.size() << " " << MemUsed(mem_all) * 2 << "GB" << endl;
 }
 
@@ -95,7 +106,7 @@ void MatrixPre::NearProd(const VecCP& x, VecCP& b)
 		send_requests.push(MPI_Request());
 		Map<VecCP> hh2(st, shift);
 		//cout << mpipre.GetRank() << " 发送范数 " << hh2.squaredNorm() << " " << hh2.topRows(2).transpose() << " " << shift << " "<< hh2.bottomRows(2).transpose()<<endl;
-		MPI_Isend(st, shift , MPI_DOUBLE_COMPLEX, m0, 0, MPI_COMM_WORLD, &send_requests.back());
+		MPI_Isend(st, shift , MPI_JD_C, m0, 0, MPI_COMM_WORLD, &send_requests.back());
 		st += shift;
 	}
 	//cout << mpipre.GetRank() << " ??? " << octree.near_cubes_recv_num.size()<< endl;
@@ -105,7 +116,7 @@ void MatrixPre::NearProd(const VecCP& x, VecCP& b)
 		//cout << mpipre.GetRank() << " 从 " << m0 << " 接收  " << octree.near_cubes_recv_num[m0] << " " << mpi_mem_end_ptr - st << endl;
 		if(octree.near_cubes_recv_num[m0] == 0) continue;
 		recv_requests.push(MPI_Request());
-		MPI_Irecv(st, octree.near_cubes_recv_num[m0], MPI_DOUBLE_COMPLEX, m0, 0, MPI_COMM_WORLD, &recv_requests.back());
+		MPI_Irecv(st, octree.near_cubes_recv_num[m0], MPI_JD_C, m0, 0, MPI_COMM_WORLD, &recv_requests.back());
 		st += octree.near_cubes_recv_num[m0];
 	}
 	//cout << "通信数量" << mpipre.GetSize() << " " << send_requests.size() << " " << recv_requests.size() << endl;
@@ -138,53 +149,7 @@ void MatrixPre::SelfProd(const VecCP& x, CP* b_str)
 		int st = octree.cube_rwgs_dif[i];
 		Map<VecCP> b(b_str + st, octree.cube_rwgs_num[i]);
 		b.noalias() = Zinv_list[i].solve(x.segment(st, octree.cube_rwgs_num[i]));
-	}
-}
-
-void MatrixPre::GetDecomposes()
-{
-	std::vector<Cube>& cube_floor = octree.GetCubesLevel(0);
-	int level_num = spectrum_pre.level_num;
-	int spectrum_num = spectrum_pre.k_vecs[level_num].size();
-	//cout << "聚合" << spectrum_num << endl;
-	decomposes.reserve(cube_floor.size());
-	const RWG& rwg = octree.rwg;
-	int edge_index = 0;
-	for (int i = 0; i < cube_floor.size(); i++) {
-		auto& cube = cube_floor[i];
-		VecJD3 point = octree.mortoncode3d.GetPoint(cube.mtc, 0);
-		MatCP decompose(octree.cube_rwgs_num[i], spectrum_num * 2);
-		//cout << i << " " << octree.cube_rwgs_num[i] << endl;
-		for (int j = 0; j < octree.cube_rwgs_num[i]; j++) {
-			const Eigen::Matrix<JD, 3, GLPN2>& Jj = rwg.J_GL[edge_index];
-			for (int row = 0; row < spectrum_num; row++) {
-				VecCP3 e1 = VecCP3::Zero();
-				VecCP3 e2 = VecCP3::Zero();
-				for (int m = 0; m < 2; ++m)
-				{
-					JD pmm = m ? -1.0 : 1.0;
-					for (int p = 0; p < GLPN; p++) {
-						Vector3d Jm = pmm * (Jj.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[edge_index][m]]);
-						JD inrpr = -(spectrum_pre.k_vecs[level_num][row]).dot(Jj.col(m * GLPN + p) - point);
-						JD ct = cos(inrpr), st = sin(inrpr);
-						Vector3d n_unit = rwg.tri_normal[rwg.edges[edge_index][m]];
-						VecCP3 ej = GL_points[p][0] * rwg.edges_length[edge_index] * (Jm)*CP(ct, st);
-						VecCP3 eh = GL_points[p][0] * rwg.edges_length[edge_index] * (Jm.cross(n_unit)) * CP(ct, st);
-						e1 += ej;// +CPD(0.0, k_unit[0].norm() / (4.0 * pi)) * mj;
-						e2 += eh;
-					}
-
-				}
-				e2 = (spectrum_pre.k_vecs[level_num][row]).cross(e2).conjugate();
-				decompose.block(j, row, 1, 1) = spectrum_pre.TCtoS[row].row(0) * 0.5 * (rwg.alpha * e1 - (1.0 - rwg.alpha)/ GlobalParams.k0 * e2);
-				decompose.block(j, row + spectrum_num, 1, 1) = spectrum_pre.TCtoS[row].row(1) * 0.5 * (rwg.alpha * e1 - (1.0 - rwg.alpha)/ GlobalParams.k0 * e2);
-				/*decompose.block(row, j, 1, 1) = spectrum_pre.TCtoS[row].row(0) * 0.5 * e1;
-				decompose.block(row + spectrum_num, j, 1, 1) = spectrum_pre.TCtoS[row].row(1) * 0.5 * e1;*/
-			}
-			++edge_index;
-		}
-		decompose *= CP(0.0, Zf * GlobalParams.k0 / (4.0 * pi));
-		decomposes.push_back(decompose);
+		//b.noalias() += self_matrix[i] * x.segment(st, octree.cube_rwgs_num[i]);
 	}
 }
 
@@ -195,43 +160,61 @@ void MatrixPre::GetAggregations()
 	int spectrum_num = spectrum_pre.k_vecs[level_num].size();
 	JD mem_sum = 0;
 	aggregations.reserve(cube_floor.size());
+	decomposes.reserve(cube_floor.size());
 	const RWG& rwg = octree.rwg;
 	int edge_index = 0;
 	for (int i = 0; i < cube_floor.size(); i++) {
 		auto& cube = cube_floor[i];
 		VecJD3 point = octree.mortoncode3d.GetPoint(cube.mtc, 0);
-		MatCP aggregation(spectrum_num * 2, octree.cube_rwgs_num[i]);
+		MatCP aggregation(spectrum_num, octree.cube_rwgs_num[i]);
+		MatCP decompose(octree.cube_rwgs_num[i], spectrum_num);
 		//cout << i << " " << octree.cube_rwgs_num[i] << endl;
 		for (int j = 0; j < octree.cube_rwgs_num[i]; j++) {
 			const Eigen::Matrix<JD, 3, GLPN2>& Jj = rwg.J_GL[edge_index];
-			for (int row = 0; row < spectrum_num; row++) {
+			for (int row = 0; row < spectrum_num / 2; row++) {
 				VecCP3 e1 = VecCP3::Zero();
 				VecCP3 e2 = VecCP3::Zero();
 				for (int m = 0; m < 2; ++m)
 				{
 					JD pmm = m ? -1.0 : 1.0;
 					for (int p = 0; p < GLPN; p++) {
-						Vector3d Jm = pmm * (Jj.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[edge_index][m]]);
+						VecJD3 Jm = pmm * (Jj.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[edge_index][m]]);
 						JD inrpr = (spectrum_pre.k_vecs[level_num][row]).dot(Jj.col(m * GLPN + p) - point);
 						JD ct = cos(inrpr), st = sin(inrpr);
-						//Vector3d n_unit = rwg.tri_normal[rwg.edges[edge_index][m]];
-						//Vector3d mc = k_unit[row].normalized().cross(rwgs[rwgs_index].vec_c[k]);
-						//Vector3d mc = 1.0 / Zf * spectrum_pre.k_vecs[level_num][row].normalized().cross(n_unit.cross(Jm));
-						//Vector3cd mj = points[k % GLPN][0] * rwgs[rwgs_index].length * mc * CPD(ct, st);
+						VecJD3 n_unit = rwg.tri_normal[rwg.edges[edge_index][m]];
+						//VecJD3 mc = k_unit[row].normalized().cross(rwgs[rwgs_index].vec_c[k]);
+						//VecJD3 mc = 1.0 / Zf * spectrum_pre.k_vecs[level_num][row].normalized().cross(n_unit.cross(Jm));
+						//VecCP3 mj = points[k % GLPN][0] * rwgs[rwgs_index].length * mc * CPD(ct, st);
 						VecCP3 ej = GL_points[p][0] * rwg.edges_length[edge_index] * (Jm) * CP(ct, st);
-						//VecCP3 eh = GL_points[p][0] * rwg.edges_length[edge_index] * (Jm.cross(n_unit)) * CP(ct, st);
+						VecCP3 eh = GL_points[p][0] * rwg.edges_length[edge_index] * (Jm.cross(n_unit)) * CP(ct, -st);
 						e1 += ej;// +CPD(0.0, k_unit[0].norm() / (4.0 * pi)) * mj;
-						//e2 += eh;
+						e2 += eh;
 					}
 
 				}
-				//e2 = (spectrum_pre.k_vecs[level_num][row]).cross(e2);
-				aggregation.block(row, j, 1, 1) = spectrum_pre.TCtoS[row].row(0) * 0.5 * e1;
-				aggregation.block(row + spectrum_num, j, 1, 1) = spectrum_pre.TCtoS[row].row(1) * 0.5 * e1;
+				e2 = (spectrum_pre.k_vecs[level_num][row]).cross(e2).conjugate();
+				aggregation.block(row, j, 1, 1) = spectrum_pre.TCtoS[row].row(0) * JD(0.5) * e1;
+				aggregation.block(row + spectrum_num / 2, j, 1, 1) = spectrum_pre.TCtoS[row].row(1) * JD(0.5) * e1;
+				
+				decompose.block(j, row, 1, 1) = spectrum_pre.TCtoS[row].row(0) * JD(0.5) * (JD(1.0) - rwg.alpha) * e2 / GlobalParams.k0;
+				decompose.block(j, row + spectrum_num / 2, 1, 1) = spectrum_pre.TCtoS[row].row(1) * JD(0.5) * (JD(1.0) - rwg.alpha) * e2 / GlobalParams.k0;
 			}
 			++edge_index;
 		}
 		mem_sum += aggregation.size();
+		/*if (mpipre.GetRank() == 0 && i == 0) {
+			MatCP hh(spectrum_num / 2, 2);
+			cout << "谱数量 " << spectrum_num << " " << spectrum_pre.thetas_num[level_num] << " " << spectrum_pre.phis_num[level_num] << endl;
+			JD dif = 2.0 * pi / spectrum_pre.phis_num[level_num];
+			for (int j = 0; j < spectrum_pre.thetas_num[level_num]; ++j) {
+				for (int k = 0; k < spectrum_pre.phis_num[level_num]; ++k) {
+					int index = j * spectrum_pre.phis_num[level_num] + k;
+					cout << spectrum_pre.thetas[level_num][j] / rad << "    " << k * dif / rad << "   " << aggregation(index + spectrum_num, 0) << endl;
+				}
+			}
+		}*/
+		if (abs(rwg.alpha - JD(1.0)) < min_eps) decompose.setZero();
+		decomposes.push_back(decompose);
 		aggregations.push_back(aggregation);
 	}
 	TWIP twip(spectrum_pre.thetas[0], spectrum_pre.thetas[level_num], spectrum_pre.phis_num[0], spectrum_pre.phis_num[level_num]);
@@ -241,7 +224,7 @@ void MatrixPre::GetAggregations()
 	aF = twip.First.transpose();
 	aS = twip.Second.transpose();
 	JD mem_all = mpiout(mem_sum, mpipre);
-	if (MPIpre().GetRank() == 0)cout << "Aggregation Done! " << spectrum_pre.thetas_num[level_num] << " " << MemUsed(mem_all) * 4 << "GB" << endl;
+	if (mpipre.GetRank() == 0)cout << "Aggregation Done! " << spectrum_pre.thetas_num[level_num] << " " << MemUsed(mem_all) * 4 << "GB" << endl;
 }
 
 void MatrixPre::AggregationProd(CP* J_ptr, bool judge)
@@ -249,9 +232,13 @@ void MatrixPre::AggregationProd(CP* J_ptr, bool judge)
 	std::vector<Cube>& cube_floor = octree.GetCubesLevel(0);
 	int sptm_num0 = spectrum_pre.GetSptmNumLevel(0);
 	int spectrum_num = spectrum_pre.k_vecs[spectrum_pre.level_num].size();
-	//cout << "波谱数量" << sptm_num0 << endl;
+	int theta_num = spectrum_pre.thetas_num[spectrum_pre.level_num];
+	int phi_num = spectrum_pre.phis_num[spectrum_pre.level_num];
+	const CP C = CP(0.0, Zf * GlobalParams.k0 / (JD(4.0) * pi));
 	int offset = 0;
-	double sum = 0;
+	JD sum = 0;
+	const JD alpha = octree.rwg.alpha;
+	VecCP temp_theta(spectrum_num),temp_phi(spectrum_num);
 	for (auto i = 0; i < cube_floor.size(); ++i)
 	{
 		auto& aggregation = aggregations[i];
@@ -264,13 +251,71 @@ void MatrixPre::AggregationProd(CP* J_ptr, bool judge)
 			/*if (i == 0) {
 				hhc(0, cube_floor[i].sptmtheta);
 			}*/
-			x.noalias() += (decomposes[i].leftCols(spectrum_num) * (aF * (aS * spectrum_theta))
-				+ decomposes[i].rightCols(spectrum_num) * (aF * (aS * spectrum_phi)));
+			temp_theta.noalias() = aF * (aS * spectrum_theta);
+			temp_phi.noalias() = aF * (aS * spectrum_phi);
+			////MatCP hh(spectrum_num / 2, 2);
+			//int ll = spectrum_num / 2;
+			//VecCP kk1(x.size()), kk2(x.size());
+			//kk1.setZero();
+			//kk2.setZero();
+			for (int j = 0; j < theta_num; ++j) {
+				for (int k = 0; k < phi_num; ++k) {
+					int index = j * phi_num + k;
+					if (index >= spectrum_num / 2) {
+						int hh = (theta_num - j - 1) * phi_num + (k + phi_num / 2) % phi_num;
+						x.noalias() += C * (decomposes[i].col(hh).conjugate() + aggregations[i].row(hh).transpose() * alpha) * temp_theta[index];
+						x.noalias() += -C * (decomposes[i].col(hh + spectrum_num / 2).conjugate() + aggregations[i].row(hh + spectrum_num / 2).transpose() * alpha) * temp_phi[index];
+						/*kk1.noalias() += (-decomposes[i].col(index) + aggregations[i].row(hh).transpose() * alpha) * temp_theta[index];
+						kk2.noalias() += (-decomposes[i].col(index + spectrum_num) - aggregations[i].row(hh + spectrum_num / 2).transpose() * alpha) * temp_phi[index];*/
+					}
+					else {
+						//continue;
+						x.noalias() += C * (-decomposes[i].col(index) + aggregations[i].row(index).adjoint() * alpha) * temp_theta[index];
+						x.noalias() += C * (-decomposes[i].col(index + spectrum_num / 2) + aggregations[i].row(index + spectrum_num / 2).adjoint() * alpha) * temp_phi[index];
+					}
+					//cout << spectrum_pre.thetas[level_num][j] / rad << "    " << k * dif / rad << "   " << decompose(0, index) << endl;
+				}
+			}
+			//if (i == 0 && mpipre.GetRank() == 0)cout << kk1 << endl << endl << kk2 << endl;
+			/*VecCP jj1 = decomposes[i].leftCols(spectrum_num).rightCols(ll) * temp_theta.bottomRows(ll);
+			VecCP jj2 = decomposes[i].rightCols(spectrum_num).rightCols(ll) * temp_phi.bottomRows(ll);
+			if(i==0&&mpipre.GetRank()==0)cout << jj1 << endl << endl << jj2 << endl;*/
+			//if(i==0) cout <<mpipre.GetRank()<<" "<< (jj1 - x).norm() << endl;
+			/*x.noalias() += (decomposes[i].leftCols(spectrum_num) * (aF * (aS * spectrum_theta))
+				+ decomposes[i].rightCols(spectrum_num) * (aF * (aS * spectrum_phi)));*/
 			//if (i == 0) cout <<"配置后范数："<< x.squaredNorm() << endl;
 		}
 		else {
-			spectrum_theta.noalias() = S * (F * (aggregation.topRows(spectrum_num) * x));
-			spectrum_phi.noalias() = S * (F * (aggregation.bottomRows(spectrum_num) * x));
+			/*spectrum_theta.noalias() = S * (F * (aggregation.topRows(spectrum_num) * x));
+			spectrum_phi.noalias() = S * (F * (aggregation.bottomRows(spectrum_num) * x));*/
+			
+			temp_theta.topRows(spectrum_num / 2).noalias() = aggregation.topRows(spectrum_num / 2) * x;
+			temp_phi.topRows(spectrum_num / 2).noalias() = aggregation.bottomRows(spectrum_num / 2) * x;
+			/*VecCP jj1 = aggregation.topRows(spectrum_num) * x;
+			VecCP jj2 = aggregation.bottomRows(spectrum_num) * x;*/
+			//if(i==0)cout << mpipre.GetRank() <<"?? "<< (temp_theta - jj).topRows(spectrum_num / 2).norm() / jj.topRows(spectrum_num / 2).norm() << endl;
+			for (int j = theta_num / 2; j < theta_num; j++) {
+				//cout << mpipre.GetRank() << "??? " << j << endl;
+				for (int k = (theta_num % 2 && j == theta_num / 2) ? phi_num / 2 : 0; k < phi_num; k++) {
+					int index = j * phi_num + k;
+					int hh = (theta_num - j - 1) * phi_num + (k + phi_num / 2)  % phi_num;
+					/*if (i == 0 && mpipre.GetRank() == 0) {
+						JD dif = 2.0 * pi / spectrum_pre.phis_num[spectrum_pre.level_num];
+						cout << spectrum_pre.thetas[spectrum_pre.level_num][theta_num - j - 1] / rad << "    " << ((k + phi_num / 2) % phi_num) * dif / rad << " " << index << "  "
+							<< hh << " " << theta_num % 2 << " " << spectrum_pre.thetas[spectrum_pre.level_num][j] / rad << "    " << k * dif / rad << endl;
+					}*/
+					temp_theta[index] = aggregation.row(hh).conjugate() * x;
+					temp_phi[index] = -aggregation.row(hh + spectrum_num / 2).conjugate() * x;
+					/*temp_theta[index] = aggregation.row(index) * x;
+					temp_phi[index] = aggregation.row(index + spectrum_num) * x;*/
+				}
+			}
+			//if (i == 0)cout << mpipre.GetRank() << "??? " << (temp_theta - jj).bottomRows(spectrum_num / 2).norm() << endl;
+			/*if (i == 0 && mpipre.GetRank() == 0) {
+				cout << jj1 << endl << endl << temp_theta << endl << endl << jj2 << endl << endl << temp_phi << endl << endl;
+			}*/
+			spectrum_theta.noalias() = S * (F * temp_theta);
+			spectrum_phi.noalias() = S * (F * temp_phi);
 		}
 		offset += octree.cube_rwgs_num[i];
 	}
@@ -297,6 +342,7 @@ void MatrixPre::GetInterpolations()
 	aSm_list.reserve(level_num);
 	S_list.reserve(level_num);
 	aSd_list.reserve(level_num);
+	JD mem_sum = 0;
 	for (int i = 0; i < level_num - 1; i++) {
 		int fa_theta_st = spectrum_pre.ip_thetas_st[i], fa_theta_end = spectrum_pre.ip_thetas_end[i];
 		int son_theta_st = spectrum_pre.sptm_thetas_st[i], son_theta_end = spectrum_pre.sptm_thetas_end[i];
@@ -322,8 +368,11 @@ void MatrixPre::GetInterpolations()
 		aSm_list.push_back(twip.Second.transpose().middleCols(fa_st_shift, actual_fa_spectrum_num));
 		aSd_list.push_back(twip.Second.transpose().rightCols(fa_end_shift));
 		aF_list.push_back(twip.First.transpose().middleRows(son_st_shift, actual_son_spectrum_num));
+		mem_sum += Fu_list[i].nonZeros() + Fm_list[i].nonZeros() + Fd_list[i].nonZeros() + S_list[i].nonZeros() 
+			+ aSu_list[i].nonZeros() + aSm_list[i].nonZeros() + aSd_list[i].nonZeros() + aF_list[i].nonZeros();
 	}
-	if (mpipre.GetRank() == 0) cout << "获得插值矩阵" << endl;
+	JD mem_all = mpiout(mem_sum, mpipre);
+	if (mpipre.GetRank() == 0) cout << "获得插值矩阵 " << MemUsed(mem_all) << "GB" << endl;
 }
 
 void MatrixPre::GetPhaseShifts()
@@ -334,7 +383,7 @@ void MatrixPre::GetPhaseShifts()
 	for (int i = 0; i < level_num - 1; ++i)
 	{
 		//unordered_map<int, int> phase_shift_map_now;
-		vector<VectorXcd> phase_shift_now;
+		vector<VecCP> phase_shift_now;
 		phase_shift_now.resize(8);
 
 		int spectrum_father_num = (spectrum_pre.ip_thetas_end[i] - spectrum_pre.ip_thetas_st[i]) * spectrum_pre.phis_num[i + 1];
@@ -348,16 +397,7 @@ void MatrixPre::GetPhaseShifts()
 				VecJD3 r_phase = octree.mortoncode3d.GetGap(cubes_son[son_index].mtc, i);
 				int phase_shift_index = (cubes_son[son_index].mtc & 7);
 				++son_index;
-				/*int hh = son_index - 1;
-				if (j == 0) {
-					cout<< hh <<"gg "<<((cubes_son[hh].mtc >> 3) == cubes_fa[j].mtc)<<" "<< cubes_son[hh].mtc<<" "<< cubes_fa[j].mtc<<" "<< phase_shift_index<<" "<<
-						phase_shift_now[phase_shift_index].size()<<endl;
-				}*/
 				if (phase_shift_now[phase_shift_index].size() > 0) continue;
-				/*cout << r_phase.transpose() / spectrum_pre.length << endl << octree.mortoncode3d.GetPoint(cubes_fa[j].mtc, i + 1).transpose() / spectrum_pre.length << endl <<
-					octree.mortoncode3d.GetPoint(cubes_son[hh].mtc, i).transpose() / spectrum_pre.length << endl
-					<< (octree.mortoncode3d.GetPoint(cubes_fa[j].mtc, i + 1) - octree.mortoncode3d.GetPoint(cubes_son[hh].mtc, i)).transpose() / spectrum_pre.length << " " << phase_shift_index << endl <<
-					cubes_son[hh].mtc << " " << cubes_fa[j].mtc << " " << (cubes_son[hh].mtc >> 3) << endl;*/
 				phase_shift_now[phase_shift_index].resize(spectrum_father_num);
 				for (int l = 0; l < spectrum_father_num; ++l) {
 					JD kdotr = -(spectrum_pre.k_vecs[i + 1][l]).dot(r_phase);
@@ -397,7 +437,7 @@ void MatrixPre::GetTransfers()
 				JD D = D_vec.norm();
 				int index = -1;
 				for (int j = 0; j < transfers_D.size(); ++j) {
-					if ((D_vec - transfers_D[j]).norm() < 1e-5) {
+					if ((D_vec - transfers_D[j]).norm() < min_eps*10) {
 						index = j;
 						break;
 					}
@@ -406,23 +446,29 @@ void MatrixPre::GetTransfers()
 					transfers_D.push_back(D_vec);
 					VecCP transfer(spectrum_num);
 					JD kD = GlobalParams.k0 * D;
-					int LL = L >= int(kD) ? min(int(kD) + 3, L) : L;
-					//int LL = L;
+					int LL = L >= int(kD) ? min(int(kD) + 5, L) : L;
+
+					/*if (L >= int(kD)) {
+						if (i == 0) LL = min(int(kD) + 5, L);
+						else if (i == 1) LL = min(int(kD) + 5, L);
+						else if (i == 2) LL = min(int(kD) + 6, L);
+						else if (i == 3) LL = min(int(kD) + 6, L);
+					}*/
 					//cout << LL << " " << kD << " " << D_vec.norm() / (GlobalParams.lam) << "波长 " << L << endl;
 					if (LL < 30) {
 						for (int k = 0; k < spectrum_num; ++k)
 						{
 							JD kdotD = (spectrum_pre.k_vecs[i][k + itp_local_st] / GlobalParams.k0).dot(D_vec / D);
 							CP TL(0, 0);
-							if (kdotD > 1.0) kdotD -= min_eps;
-							if (kdotD < -1.0) kdotD += min_eps;
+							if (kdotD > JD(1.0)) kdotD -= min_eps;
+							if (kdotD < -JD(1.0)) kdotD += min_eps;
 							TL = TranferF(LL, kdotD, kD, GlobalParams.k0) * weights[k];
 							transfer[k] = TL;
 						}
 					}
 					else {
 						int M = 5 * LL;
-						JD diff_theta = pi / M;
+						JD diff_theta = pi / JD(M);
 						vector<CP> TArray(M + 1);
 						for (int k = 0; k <= M; ++k) {
 							JD ct = cos(diff_theta * k);
@@ -432,8 +478,8 @@ void MatrixPre::GetTransfers()
 						{
 							JD kdotD = (spectrum_pre.k_vecs[i][k + itp_local_st] / GlobalParams.k0).dot(D_vec / D);
 							CP TL(0, 0);
-							if (kdotD > 1.0) kdotD -= min_eps;
-							if (kdotD < -1.0) kdotD += min_eps;
+							if (kdotD > JD(1.0)) kdotD -= min_eps;
+							if (kdotD < -JD(1.0)) kdotD += min_eps;
 							//TL = TranferF(L, kdotD, kD);
 							TL = LagrangeITF(TArray, kdotD, diff_theta, 3) * weights[k];
 							transfer[k] = TL;
@@ -539,22 +585,22 @@ void MatrixPre::InterpolationProd(bool judge)
 		//cout <<"层数"<< level <<" "<<exchange_num<<endl;
 
 		if (judge) {
-			Map<VectorXcd> sptm_fa(cubes_fa[0].sptmtheta, cubes_fa.size() * 2 * fa_sptm_num);
-			Map<VectorXcd> sptm_temp(mpi_mem_st_ptr, cubes_fa.size() * 2 * Itp_num);
+			Map<VecCP> sptm_fa(cubes_fa[0].sptmtheta, cubes_fa.size() * 2 * fa_sptm_num);
+			Map<VecCP> sptm_temp(mpi_mem_st_ptr, cubes_fa.size() * 2 * Itp_num);
 			if (level == mpipre.Get_BP_end() - 1 && mpipre.GetProcessNum(level + 1) > 1)
 			{
 				/*const int cluster_num = mpipre.GetProcessNum(level + 1);
 				std::vector<MPI_Request> request(cluster_num);
 				for (int k = 0; k < cluster_num; k++) {
-					MPI_Isend(sptm_fa.data(), cubes_fa.size() * 2 * fa_sptm_num, MPI_DOUBLE_COMPLEX, mpipre.Get_BP_com(k), cubes_fa.size() * 2 * fa_sptm_num, MPI_COMM_WORLD, &request[k]);
+					MPI_Isend(sptm_fa.data(), cubes_fa.size() * 2 * fa_sptm_num, MPI_JD_C, mpipre.Get_BP_com(k), cubes_fa.size() * 2 * fa_sptm_num, MPI_COMM_WORLD, &request[k]);
 				}
 				for (int k = 0; k < cluster_num; k++) {
 					int send_num = (spectrum_pre.BP_HSP_theta_index[k + 1] - spectrum_pre.BP_HSP_theta_index[k]) * fa_phi_num * 2 * cubes_fa.size();
 					int st_num = spectrum_pre.BP_HSP_theta_index[k] * fa_phi_num * 2 * cubes_fa.size();
-					MPI_Recv(mpi_mem_st_ptr + st_num, send_num, MPI_DOUBLE_COMPLEX, mpipre.Get_BP_com(k), send_num, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+					MPI_Recv(mpi_mem_st_ptr + st_num, send_num, MPI_JD_C, mpipre.Get_BP_com(k), send_num, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 				}
 				for (int k = 0; k < cluster_num; k++) MPI_Wait(&request[k], MPI_STATUS_IGNORE);
-				Map<VectorXcd> sptm_recv(mem_st_ptr, cubes_fa.size() * 2 * Itp_num);
+				Map<VecCP> sptm_recv(mem_st_ptr, cubes_fa.size() * 2 * Itp_num);
 				sptm_recv = sptm_temp;
 				for (int j = 0; j < cubes_fa.size(); j++) {
 					for (int k = 0; k < cluster_num; ++k) {
@@ -568,12 +614,12 @@ void MatrixPre::InterpolationProd(bool judge)
 
 			}
 			else if (exchange_num) {
-				MPI_Sendrecv(sptm_fa.data(), cubes_fa.size() * 2 * fa_sptm_num, MPI_DOUBLE_COMPLEX, mpipre.GetRankExchange(level), 0,
-					mpi_mem_st_ptr + cubes_fa.size() * fa_sptm_num * 2, cubes_fa.size() * exchange_num * 2, MPI_DOUBLE_COMPLEX, mpipre.GetRankExchange(level), 0,
+				MPI_Sendrecv(sptm_fa.data(), cubes_fa.size() * 2 * fa_sptm_num, MPI_JD_C, mpipre.GetRankExchange(level), 0,
+					mpi_mem_st_ptr + cubes_fa.size() * fa_sptm_num * 2, cubes_fa.size() * exchange_num * 2, MPI_JD_C, mpipre.GetRankExchange(level), 0,
 					MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-				Map<VectorXcd> sptm_ex(mpi_mem_st_ptr + cubes_fa.size() * fa_sptm_num * 2, cubes_fa.size() * exchange_num * 2);
+				Map<VecCP> sptm_ex(mpi_mem_st_ptr + cubes_fa.size() * fa_sptm_num * 2, cubes_fa.size() * exchange_num * 2);
 				for (int j = 0; j < cubes_fa.size(); j++) {
-					Map<VectorXcd> sptm_itp(mpi_mem_st_ptr + j * Itp_num * 2, Itp_num * 2);
+					Map<VecCP> sptm_itp(mpi_mem_st_ptr + j * Itp_num * 2, Itp_num * 2);
 					sptm_itp.topRows(Itp_num).segment(itp_ex_st, exchange_num) = sptm_ex.segment(j * exchange_num * 2, exchange_num);
 					sptm_itp.bottomRows(Itp_num).segment(itp_ex_st, exchange_num) = sptm_ex.segment(j * exchange_num * 2 + exchange_num, exchange_num);
 					sptm_itp.topRows(Itp_num).segment(itp_local_st, fa_sptm_num) = sptm_fa.segment(j * fa_sptm_num * 2, fa_sptm_num);
@@ -586,27 +632,27 @@ void MatrixPre::InterpolationProd(bool judge)
 			auto& aSm = aSm_list[level];
 			auto& aSd = aSd_list[level];
 			auto& aF = aF_list[level];
-			Map<VectorXcd> spectrum_up_f(temp_mem_ptr, TWIP::pp * 2 * fa_phi_num);
-			Map<VectorXcd> spectrum_down_f(temp_mem_ptr + TWIP::pp * 2 * fa_phi_num, TWIP::pp * 2 * fa_phi_num);
-			Map<VectorXcd> spectrum_send_up(temp_mem_ptr + 2 * TWIP::pp * 2 * fa_phi_num, TWIP::pp * 2 * fa_phi_num);
-			Map<VectorXcd> spectrum_send_down(temp_mem_ptr + 3 * TWIP::pp * 2 * fa_phi_num, TWIP::pp * 2 * fa_phi_num);
+			Map<VecCP> spectrum_up_f(temp_mem_ptr, TWIP::pp * 2 * fa_phi_num);
+			Map<VecCP> spectrum_down_f(temp_mem_ptr + TWIP::pp * 2 * fa_phi_num, TWIP::pp * 2 * fa_phi_num);
+			Map<VecCP> spectrum_send_up(temp_mem_ptr + 2 * TWIP::pp * 2 * fa_phi_num, TWIP::pp * 2 * fa_phi_num);
+			Map<VecCP> spectrum_send_down(temp_mem_ptr + 3 * TWIP::pp * 2 * fa_phi_num, TWIP::pp * 2 * fa_phi_num);
 
 			MPI_Request request_f[4];
-			MPI_Send_init(spectrum_send_up.data(), TWIP::pp * 2 * fa_phi_num, MPI_DOUBLE_COMPLEX, mpipre.GetRankUp(level), 0, MPI_COMM_WORLD, &request_f[0]);
-			MPI_Send_init(spectrum_send_down.data(), TWIP::pp * 2 * fa_phi_num, MPI_DOUBLE_COMPLEX, mpipre.GetRankDown(level), 1, MPI_COMM_WORLD, &request_f[1]);
-			MPI_Recv_init(spectrum_up_f.data(), TWIP::pp * 2 * fa_phi_num, MPI_DOUBLE_COMPLEX, mpipre.GetRankUp(level), 1, MPI_COMM_WORLD, &request_f[2]);
-			MPI_Recv_init(spectrum_down_f.data(), TWIP::pp * 2 * fa_phi_num, MPI_DOUBLE_COMPLEX, mpipre.GetRankDown(level), 0, MPI_COMM_WORLD, &request_f[3]);
+			MPI_Send_init(spectrum_send_up.data(), TWIP::pp * 2 * fa_phi_num, MPI_JD_C, mpipre.GetRankUp(level), 0, MPI_COMM_WORLD, &request_f[0]);
+			MPI_Send_init(spectrum_send_down.data(), TWIP::pp * 2 * fa_phi_num, MPI_JD_C, mpipre.GetRankDown(level), 1, MPI_COMM_WORLD, &request_f[1]);
+			MPI_Recv_init(spectrum_up_f.data(), TWIP::pp * 2 * fa_phi_num, MPI_JD_C, mpipre.GetRankUp(level), 1, MPI_COMM_WORLD, &request_f[2]);
+			MPI_Recv_init(spectrum_down_f.data(), TWIP::pp * 2 * fa_phi_num, MPI_JD_C, mpipre.GetRankDown(level), 0, MPI_COMM_WORLD, &request_f[3]);
 
 			//if (ok)cout << mpipre.GetRank() << "???" << endl;
 			int son_index = 0;
 			for (int j = 0; j < cubes_fa.size(); ++j)
 			{
-				Map<VectorXcd> fa_sptm_theta(mpi_mem_st_ptr + j * Itp_num * 2, Itp_num);
-				Map<VectorXcd> fa_sptm_phi(mpi_mem_st_ptr + j * Itp_num * 2 + Itp_num, Itp_num);
+				Map<VecCP> fa_sptm_theta(mpi_mem_st_ptr + j * Itp_num * 2, Itp_num);
+				Map<VecCP> fa_sptm_phi(mpi_mem_st_ptr + j * Itp_num * 2 + Itp_num, Itp_num);
 				//if (ok && j == 0 && mpipre.GetRank() == 0) cout << fa_sptm_theta.topRows(131044).bottomRows(3).transpose() << "      " << Itp_num << endl;
 				while (son_index < cubes_son.size() && (cubes_son[son_index].mtc >> 3) == cubes_fa[j].mtc)
 				{
-					VectorXcd& phase_shift = phase_shifts[level][cubes_son[son_index].mtc & 7];
+					VecCP& phase_shift = phase_shifts[level][cubes_son[son_index].mtc & 7];
 
 					if (son_theta_st != 0) {
 						spectrum_send_up.topRows(TWIP::pp * fa_phi_num).noalias() = fa_sptm_theta.topRows(TWIP::pp * fa_phi_num)
@@ -624,8 +670,8 @@ void MatrixPre::InterpolationProd(bool judge)
 						MPI_Start(&request_f[1]);
 						MPI_Start(&request_f[3]);
 					}
-					Map<VectorXcd> son_sptm_theta(cubes_son[son_index].sptmtheta, sptm_son_num);
-					Map<VectorXcd> son_sptm_phi(cubes_son[son_index].sptmtheta + sptm_son_num, sptm_son_num);
+					Map<VecCP> son_sptm_theta(cubes_son[son_index].sptmtheta, sptm_son_num);
+					Map<VecCP> son_sptm_phi(cubes_son[son_index].sptmtheta + sptm_son_num, sptm_son_num);
 					/*if (son_index == 0) {
 						VecCP hh(sptm_son_num * 2);
 						hh.topRows(sptm_son_num) = aF * (aSm * phase_shift.conjugate().cwiseProduct(fa_sptm_theta));
@@ -652,7 +698,7 @@ void MatrixPre::InterpolationProd(bool judge)
 					//cout << mpipre.GetRank() << "level:" << level << "son_index:" << son_index << " " << j << endl;
 				}
 			}
-			//Map<VectorXcd> son_sptm(mem_st_ptr, sptm_son_num * 2 * cubes_son.size());
+			//Map<VecCP> son_sptm(mem_st_ptr, sptm_son_num * 2 * cubes_son.size());
 			//sum_level = son_sptm.squaredNorm();
 			for (int i = 0; i < 4; ++i) MPI_Request_free(&request_f[i]);
 		}
@@ -662,17 +708,17 @@ void MatrixPre::InterpolationProd(bool judge)
 			auto& Fd = Fd_list[level];
 			auto& S = S_list[level];
 
-			Map<VectorXcd> sptm_recv_up(temp_mem_ptr, TWIP::p * 2 * son_phi_num);
-			Map<VectorXcd> sptm_recv_down(temp_mem_ptr + TWIP::p * 2 * son_phi_num, TWIP::p * 2 * son_phi_num);
-			Map<VectorXcd> sptm_send_up(temp_mem_ptr + TWIP::p * 4 * son_phi_num, TWIP::p * 2 * son_phi_num);
-			Map<VectorXcd> sptm_send_down(temp_mem_ptr + TWIP::p * 6 * son_phi_num, TWIP::p * 2 * son_phi_num);
-			Map<VectorXcd> itp_sptm(temp_mem_ptr + TWIP::p * 8 * son_phi_num, Itp_num * 2);
+			Map<VecCP> sptm_recv_up(temp_mem_ptr, TWIP::p * 2 * son_phi_num);
+			Map<VecCP> sptm_recv_down(temp_mem_ptr + TWIP::p * 2 * son_phi_num, TWIP::p * 2 * son_phi_num);
+			Map<VecCP> sptm_send_up(temp_mem_ptr + TWIP::p * 4 * son_phi_num, TWIP::p * 2 * son_phi_num);
+			Map<VecCP> sptm_send_down(temp_mem_ptr + TWIP::p * 6 * son_phi_num, TWIP::p * 2 * son_phi_num);
+			Map<VecCP> itp_sptm(temp_mem_ptr + TWIP::p * 8 * son_phi_num, Itp_num * 2);
 
 			MPI_Request request_s[4];
-			MPI_Send_init(sptm_send_up.data(), TWIP::p * 2 * son_phi_num, MPI_DOUBLE_COMPLEX, mpipre.GetRankUp(level), 0, MPI_COMM_WORLD, &request_s[0]);
-			MPI_Send_init(sptm_send_down.data(), TWIP::p * 2 * son_phi_num, MPI_DOUBLE_COMPLEX, mpipre.GetRankDown(level), 1, MPI_COMM_WORLD, &request_s[1]);
-			MPI_Recv_init(sptm_recv_up.data(), TWIP::p * 2 * son_phi_num, MPI_DOUBLE_COMPLEX, mpipre.GetRankUp(level), 1, MPI_COMM_WORLD, &request_s[2]);
-			MPI_Recv_init(sptm_recv_down.data(), TWIP::p * 2 * son_phi_num, MPI_DOUBLE_COMPLEX, mpipre.GetRankDown(level), 0, MPI_COMM_WORLD, &request_s[3]);
+			MPI_Send_init(sptm_send_up.data(), TWIP::p * 2 * son_phi_num, MPI_JD_C, mpipre.GetRankUp(level), 0, MPI_COMM_WORLD, &request_s[0]);
+			MPI_Send_init(sptm_send_down.data(), TWIP::p * 2 * son_phi_num, MPI_JD_C, mpipre.GetRankDown(level), 1, MPI_COMM_WORLD, &request_s[1]);
+			MPI_Recv_init(sptm_recv_up.data(), TWIP::p * 2 * son_phi_num, MPI_JD_C, mpipre.GetRankUp(level), 1, MPI_COMM_WORLD, &request_s[2]);
+			MPI_Recv_init(sptm_recv_down.data(), TWIP::p * 2 * son_phi_num, MPI_JD_C, mpipre.GetRankDown(level), 0, MPI_COMM_WORLD, &request_s[3]);
 
 			/*int level_t = 6;
 			CP E_yan(0, 0);*/
@@ -682,10 +728,10 @@ void MatrixPre::InterpolationProd(bool judge)
 				itp_sptm.setZero();
 				//cout << level << " " << "第几个盒子" << j << endl;
 				while (son_index < cubes_son.size() && (cubes_son[son_index].mtc >> 3) == cubes_fa[j].mtc) {
-					VectorXcd& phase_shift = phase_shifts[level][cubes_son[son_index].mtc & 7];
+					VecCP& phase_shift = phase_shifts[level][cubes_son[son_index].mtc & 7];
 
-					Map<VectorXcd> sptm_son_theta(cubes_son[son_index].sptmtheta, sptm_son_num);
-					Map<VectorXcd> sptm_son_phi(cubes_son[son_index].sptmtheta + sptm_son_num, sptm_son_num);
+					Map<VecCP> sptm_son_theta(cubes_son[son_index].sptmtheta, sptm_son_num);
+					Map<VecCP> sptm_son_phi(cubes_son[son_index].sptmtheta + sptm_son_num, sptm_son_num);
 					//if (ok)cout << mpipre.GetRank() << " ?" << fa_index << " " <<j<< endl;
 					if (son_theta_st != 0) {
 						sptm_send_up.topRows(TWIP::p * son_phi_num) = sptm_son_theta.topRows(TWIP::p * son_phi_num);
@@ -715,21 +761,21 @@ void MatrixPre::InterpolationProd(bool judge)
 					if (son_theta_end != spectrum_pre.thetas_num[level]) MPI_Wait(&request_s[1], MPI_STATUS_IGNORE);
 					++son_index;
 				}
-				Map<VectorXcd> sptm_fa(mpi_mem_st_ptr + j * 2 * fa_sptm_num, fa_sptm_num * 2);
+				Map<VecCP> sptm_fa(mpi_mem_st_ptr + j * 2 * fa_sptm_num, fa_sptm_num * 2);
 				if (level == mpipre.Get_BP_end() - 1 && mpipre.GetProcessNum(level + 1) > 1)
 				{
 					/*const int cluster_num = mpipre.GetProcessNum(level + 1);
 					for (int k = 0; k < cluster_num; k++) {
 						int send_num = (spectrum_pre.BP_HSP_theta_index[k + 1] - spectrum_pre.BP_HSP_theta_index[k]) * fa_phi_num;
 						int st_num = spectrum_pre.BP_HSP_theta_index[k] * fa_phi_num;
-						Map<VectorXcd> sptm_send(mpi_mem_st_ptr + cubes_fa.size() * 2 * st_num + j * send_num * 2, send_num * 2);
+						Map<VecCP> sptm_send(mpi_mem_st_ptr + cubes_fa.size() * 2 * st_num + j * send_num * 2, send_num * 2);
 						sptm_send.topRows(send_num) = itp_sptm.topRows(Itp_num).segment(st_num, send_num);
 						sptm_send.bottomRows(send_num) = itp_sptm.bottomRows(Itp_num).segment(st_num, send_num);
 					}*/
 					//cout << mpipre.GetRank() << "????" << endl;
 				}
 				else if (exchange_num) {
-					Map<VectorXcd> sptm_exchange(mpi_mem_st_ptr + cubes_fa.size() * 2 * fa_sptm_num + j * exchange_num * 2, exchange_num * 2);
+					Map<VecCP> sptm_exchange(mpi_mem_st_ptr + cubes_fa.size() * 2 * fa_sptm_num + j * exchange_num * 2, exchange_num * 2);
 					sptm_exchange.topRows(exchange_num).noalias() = itp_sptm.topRows(Itp_num).segment(itp_ex_st, exchange_num);
 					sptm_exchange.bottomRows(exchange_num).noalias() = itp_sptm.bottomRows(Itp_num).segment(itp_ex_st, exchange_num);
 					sptm_fa.topRows(fa_sptm_num).noalias() = itp_sptm.topRows(Itp_num).segment(itp_local_st, fa_sptm_num);
@@ -741,13 +787,13 @@ void MatrixPre::InterpolationProd(bool judge)
 				{
 					JD sum = sptm_fa.topRows(fa_sptm_num).squaredNorm();
 					JD all_sum = 0;
-					MPI_Reduce(&sum, &all_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+					MPI_Reduce(&sum, &all_sum, 1, MPI_JD, MPI_SUM, 0, MPI_COMM_WORLD);
 					if (mpipre.GetRank() == 0) cout << level << "  " << j << " 父亲总范数 " << all_sum << endl;
 					if(mpipre.GetSize()>1) cout << mpipre.GetRank() << " 本地范数 " << sptm_fa.squaredNorm() << endl;
 				}*/
 			}
 			//cout<<mpipre.GetRank()<<" ???"<<endl;
-			Map<VectorXcd> sptm_fa(cubes_fa[0].sptmtheta, cubes_fa.size() * 2 * fa_sptm_num);
+			Map<VecCP> sptm_fa(cubes_fa[0].sptmtheta, cubes_fa.size() * 2 * fa_sptm_num);
 			if (level == mpipre.Get_BP_end() - 1 && mpipre.GetProcessNum(level + 1) > 1)
 			{
 				/*const int cluster_num = mpipre.GetProcessNum(level + 1);
@@ -755,11 +801,11 @@ void MatrixPre::InterpolationProd(bool judge)
 				for (int k = 0; k < cluster_num; k++) {
 					int send_num = (spectrum_pre.BP_HSP_theta_index[k + 1] - spectrum_pre.BP_HSP_theta_index[k]) * fa_phi_num * 2;
 					int st_num = spectrum_pre.BP_HSP_theta_index[k] * fa_phi_num * 2;
-					MPI_Isend(mpi_mem_st_ptr + cubes_fa.size() * st_num, cubes_fa.size() * send_num, MPI_DOUBLE_COMPLEX, mpipre.Get_BP_com(k), 0, MPI_COMM_WORLD, &request[k]);
+					MPI_Isend(mpi_mem_st_ptr + cubes_fa.size() * st_num, cubes_fa.size() * send_num, MPI_JD_C, mpipre.Get_BP_com(k), 0, MPI_COMM_WORLD, &request[k]);
 				}
-				Map<VectorXcd> sptm_recv(mem_st_ptr + cubes_fa.size() * 2 * fa_sptm_num, cubes_fa.size() * 2 * fa_sptm_num);
+				Map<VecCP> sptm_recv(mem_st_ptr + cubes_fa.size() * 2 * fa_sptm_num, cubes_fa.size() * 2 * fa_sptm_num);
 				for (int k = 0; k < cluster_num; k++) {
-					MPI_Recv(sptm_recv.data(), cubes_fa.size() * 2 * fa_sptm_num, MPI_DOUBLE_COMPLEX, mpipre.Get_BP_com(k), 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+					MPI_Recv(sptm_recv.data(), cubes_fa.size() * 2 * fa_sptm_num, MPI_JD_C, mpipre.Get_BP_com(k), 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 					if (k == 0) sptm_fa.noalias() = sptm_recv;
 					else sptm_fa.noalias() += sptm_recv;
 				}
@@ -767,14 +813,14 @@ void MatrixPre::InterpolationProd(bool judge)
 			}
 			else if (exchange_num) {
 				//if(mpipre.GetRank() == 0)cout<<level<<" ???"<<endl;
-				MPI_Sendrecv(mpi_mem_st_ptr + cubes_fa.size() * fa_sptm_num * 2, cubes_fa.size() * exchange_num * 2, MPI_DOUBLE_COMPLEX, mpipre.GetRankExchange(level), 0,
-					sptm_fa.data(), cubes_fa.size() * 2 * fa_sptm_num, MPI_DOUBLE_COMPLEX, mpipre.GetRankExchange(level), 0,
+				MPI_Sendrecv(mpi_mem_st_ptr + cubes_fa.size() * fa_sptm_num * 2, cubes_fa.size() * exchange_num * 2, MPI_JD_C, mpipre.GetRankExchange(level), 0,
+					sptm_fa.data(), cubes_fa.size() * 2 * fa_sptm_num, MPI_JD_C, mpipre.GetRankExchange(level), 0,
 					MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-				Map<VectorXcd> sptm_local(mpi_mem_st_ptr, cubes_fa.size() * fa_sptm_num * 2);
+				Map<VecCP> sptm_local(mpi_mem_st_ptr, cubes_fa.size() * fa_sptm_num * 2);
 				sptm_fa += sptm_local;
 			}
 			else {
-				Map<VectorXcd> sptm(mpi_mem_st_ptr, cubes_fa.size() * 2 * fa_sptm_num);
+				Map<VecCP> sptm(mpi_mem_st_ptr, cubes_fa.size() * 2 * fa_sptm_num);
 				sptm_fa.noalias() = sptm;
 			}
 			
@@ -789,7 +835,7 @@ void MatrixPre::InterpolationProd(bool judge)
 				Map<VecCP> sptm_son(cubes_son[0].sptmtheta, sptm_son_num * 2 * cubes_son.size());
 				JD sum = sptm_son.squaredNorm();
 				JD all_sum = 0;
-				MPI_Reduce(&sum, &all_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+				MPI_Reduce(&sum, &all_sum, 1, MPI_JD, MPI_SUM, 0, MPI_COMM_WORLD);
 				if (mpipre.GetRank() == 0) cout <<level<< " 总范数 " << all_sum << endl;
 				
 			}*/
@@ -798,7 +844,7 @@ void MatrixPre::InterpolationProd(bool judge)
 				Map<VecCP> sptm_son(cubes_son[0].sptmtheta, sptm_son_num * 2 * cubes_son.size());
 				JD sum = sptm_son.squaredNorm();
 				JD all_sum = 0;
-				MPI_Reduce(&sum, &all_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+				MPI_Reduce(&sum, &all_sum, 1, MPI_JD, MPI_SUM, 0, MPI_COMM_WORLD);
 				if (mpipre.GetRank() == 0) cout << " 总范数 " << all_sum << endl;
 			}*/
 		}
@@ -811,7 +857,7 @@ void MatrixPre::InterpolationProd(bool judge)
 			Map<VecCP> sptm_son(cubes_son[0].sptmtheta, sptm_son_num * 2 * cubes_son.size());
 			JD sum = sptm_son.squaredNorm();
 			JD all_sum = 0;
-			MPI_Reduce(&sum, &all_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+			MPI_Reduce(&sum, &all_sum, 1, MPI_JD, MPI_SUM, 0, MPI_COMM_WORLD);
 			if (mpipre.GetRank() == 0) cout << level_num - 1 << " 总范数 " << all_sum << endl;
 		}*/
 		
@@ -821,7 +867,7 @@ void MatrixPre::InterpolationProd(bool judge)
 		Map<VecCP> sptm_son(cubes_son[0].sptmtheta, sptm_son_num * 2 * cubes_son.size());
 		JD sum = sptm_son.squaredNorm();
 		JD all_sum = 0;
-		MPI_Reduce(&sum, &all_sum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+		MPI_Reduce(&sum, &all_sum, 1, MPI_JD, MPI_SUM, 0, MPI_COMM_WORLD);
 		if (mpipre.GetRank() == 0) cout << " 总范数 " << all_sum << endl;*/
 	}
 }
@@ -878,7 +924,7 @@ void MatrixPre::StartTransfer(const int level)
 			//cout <<mpipre.GetRank() << " 发送范数：" << sss.squaredNorm() << endl;
 			request_send.push(MPI_Request());
 			//cout <<mpipre.GetRank() << "  " <<send_rank << "发 " << cubes_index.size() << " "<< sptm_num * 2 * cubes_index.size()<<endl;
-			MPI_Isend(send_st, sptm_num * 2 * cubes_index.size(), MPI_DOUBLE_COMPLEX, send_rank, cubes_index.size(), MPI_COMM_WORLD, &request_send.back());
+			MPI_Isend(send_st, sptm_num * 2 * cubes_index.size(), MPI_JD_C, send_rank, cubes_index.size(), MPI_COMM_WORLD, &request_send.back());
 			send_st += transfer_buffer;
 			++send_num;
 		}
@@ -892,7 +938,7 @@ void MatrixPre::StartTransfer(const int level)
 			}
 			request_recv.push(MPI_Request());
 			//cout <<mpipre.GetRank() << "  " << recv_rank << "接 " << recv_cubes_num[recv_rank] << " " << transfer_buffer << endl;
-			MPI_Irecv(recv_st, transfer_buffer, MPI_DOUBLE_COMPLEX, recv_rank, recv_cubes_num[recv_rank], MPI_COMM_WORLD, &request_recv.back());
+			MPI_Irecv(recv_st, transfer_buffer, MPI_JD_C, recv_rank, recv_cubes_num[recv_rank], MPI_COMM_WORLD, &request_recv.back());
 			recv_st += transfer_buffer;
 			++recv_num;
 		}
@@ -942,14 +988,14 @@ void MatrixPre::StartTransfer(const int level)
 	//cout << "转移后范数" << level << " " << cubes_sptm.squaredNorm() << endl;
 }
 
-Eigen::Vector2cd MatrixPre::GetRwgEFarField(const JD theta, const JD phi, const Eigen::VectorXcd& J)
+Eigen::Vector<CP, 2> MatrixPre::GetRwgEFarField(const JD theta, const JD phi, const VecCP& J)
 {
 	auto& cubes_floor = octree.GetCubesLevel(0);
 	auto floor_cubes_num = cubes_floor.size();
 	JD ct = cos(theta * rad), st = sin(theta * rad), cp = cos(phi * rad), sp = sin(phi * rad);
-	Eigen::Vector3d r_unit{ st * cp ,st * sp,ct };
+	VecJD3 r_unit{ st * cp ,st * sp,ct };
 
-	Eigen::MatrixXcd c = Eigen::MatrixXcd::Zero(2, J.size());
+	MatCP c = MatCP::Zero(2, J.size());
 	Matrix<JD, 2, 3> T1;
 	T1 << ct * cp, ct* sp, -st,
 		-sp, cp, 0;
@@ -964,35 +1010,35 @@ Eigen::Vector2cd MatrixPre::GetRwgEFarField(const JD theta, const JD phi, const 
 		for (auto j = 0; j < cube_rwgs_num; ++j)
 		{
 			const Eigen::Matrix<JD, 3, GLPN2>& Jj = rwg.J_GL[edge_index];
-			Vector3cd e = Vector3cd::Zero();
+			VecCP3 e = VecCP3::Zero();
 			for (auto m = 0; m < 2; ++m) {
-				double pmm = m ? -1 : 1;
+				JD pmm = m ? -1 : 1;
 				for (int p = 0; p < GLPN; ++p) {
-					Vector3d Jm = pmm * (Jj.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[edge_index][m]]);
+					VecJD3 Jm = pmm * (Jj.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[edge_index][m]]);
 					JD inrpr = r_unit.dot(Jj.col(m * GLPN + p));
 					JD ct = cos(GlobalParams.k0 * inrpr), st = sin(GlobalParams.k0 * inrpr);
-					//Vector3d n_unit = rwg.tri_normal[rwg.edges[edge_index][m]];
-					//Vector3d mc = 1.0 / Zf * r_unit.normalized().cross(n_unit.cross(Jm));
-					Vector3cd ej = GL_points[p % GLPN][0] * rwg.edges_length[edge_index] * (Jm ) * CP(ct, st);
-					e += CP(0.0, -Zf * GlobalParams.k0 / (4.0 * pi)) * ej;
+					//VecJD3 n_unit = rwg.tri_normal[rwg.edges[edge_index][m]];
+					//VecJD3 mc = 1.0 / Zf * r_unit.normalized().cross(n_unit.cross(Jm));
+					VecCP3 ej = GL_points[p][0] * rwg.edges_length[edge_index] * (Jm ) * CP(ct, st);
+					e += CP(0.0, -Zf * GlobalParams.k0 / (JD(4.0) * pi)) * ej;
 				}
 			}
-			Vector2cd e_r = T1 * e * 0.5;
+			Eigen::Vector<CP, 2> e_r = T1 * e * JD(0.5);
 			c.block(0, edge_index++, 2, 1) = e_r;
 		}
 	}
 	return c * J;
 }
 
-Eigen::Vector3cd MatrixPre::GetRwgENearField(const VecJD3 r, const Eigen::VectorXcd& J)
+VecCP3 MatrixPre::GetRwgENearField(const VecJD3 r, const VecCP& J)
 {
 	auto& cubes_floor = octree.GetCubesLevel(0);
 	const RWG& rwg = octree.rwg;
-	Eigen::Vector3cd ej = Eigen::Vector3cd::Zero();
-	Eigen::Vector3cd e = Eigen::Vector3cd::Zero();
+	VecCP3 ej = VecCP3::Zero();
+	VecCP3 e = VecCP3::Zero();
 	const CP C1 = CP(0, -1.0 / (2.0 * pi * GlobalParams.freq * epsilon0 * 4.0 * pi));
 
-	std::vector<int> rwg_index;
+	/*std::vector<int> rwg_index;
 
 	auto& proxy_cube0 = octree.GetProxyCubesLevel(0)[0];
 	for (auto& local_cube : proxy_cube0.local_index) {
@@ -1011,13 +1057,14 @@ Eigen::Vector3cd MatrixPre::GetRwgENearField(const VecJD3 r, const Eigen::Vector
 				rwg_index.push_back(i);
 			}
 		}
-	}
+	}*/
 	//cout <<"数量："<< rwg_index.size() << endl;
-	//for(int i=0;i<rwg.edges.size();++i)
-	for (auto& i : rwg_index) {
+	int num = octree.local_rwgs_num();
+	for(int i=0;i< num;++i){
+	//for (auto& i : rwg_index) {
 		const Eigen::Matrix<JD, 3, GLPN2>& Ji = rwg.J_GL[i];
 		for (int m = 0; m < 2; ++m) {
-			double pmm = m ? -1 : 1;
+			JD pmm = m ? -1 : 1;
 			for (int p = 0; p < GLPN; ++p) {
 				VecJD3 Jm = pmm * (Ji.col(m * GLPN + p) - rwg.points[rwg.vertex_edges[i][m]]);
 				CP jx = Jm[0], jy = Jm[1], jz = Jm[2];
@@ -1027,9 +1074,9 @@ Eigen::Vector3cd MatrixPre::GetRwgENearField(const VecJD3 r, const Eigen::Vector
 				CP G1 = CP(1, GlobalParams.k0 * R) * CP(ct, st) / (R * R * R);
 				CP G2 = CP(3 - GlobalParams.k0 * GlobalParams.k0 * R * R, 3 * GlobalParams.k0 * R) * CP(ct, st) / (R * R * R * R * R);
 
-				ej(0) = J(i) * (2.0 * G1 * jx + G2 * (R_v(0) * (R_v(2) * jz + R_v(1) * jy) - jx * (R_v(1) * R_v(1) + R_v(2) * R_v(2))));
-				ej(1) = J(i) * (2.0 * G1 * jy + G2 * (R_v(1) * (R_v(0) * jx + R_v(2) * jz) - jy * (R_v(2) * R_v(2) + R_v(0) * R_v(0))));
-				ej(2) = J(i) * (2.0 * G1 * jz + G2 * (R_v(2) * (R_v(1) * jy + R_v(0) * jx) - jz * (R_v(0) * R_v(0) + R_v(1) * R_v(1))));
+				ej(0) = J(i) * (JD(2.0) * G1 * jx + G2 * (R_v(0) * (R_v(2) * jz + R_v(1) * jy) - jx * (R_v(1) * R_v(1) + R_v(2) * R_v(2))));
+				ej(1) = J(i) * (JD(2.0) * G1 * jy + G2 * (R_v(1) * (R_v(0) * jx + R_v(2) * jz) - jy * (R_v(2) * R_v(2) + R_v(0) * R_v(0))));
+				ej(2) = J(i) * (JD(2.0) * G1 * jz + G2 * (R_v(2) * (R_v(1) * jy + R_v(0) * jx) - jz * (R_v(0) * R_v(0) + R_v(1) * R_v(1))));
 
 				e += C1 * rwg.edges_length[i] * GL_points[p % GLPN][0] * ej * 0.5;
 			}

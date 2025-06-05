@@ -2,46 +2,48 @@
 using namespace std;
 using namespace Eigen;
 
-void MLFMM::GmresP(const Eigen::VectorXcd& b, Eigen::VectorXcd& J)
+void MLFMM::GmresP(const VecCP& b, VecCP& J)
 {
-	if (mpipre.GetRank() == 0) cout << "Start iterating " << b.squaredNorm() << endl;
-	VectorXcd b_pre(b.rows());
+	if (mpipre.GetRank() == 0) cout << "!!! " << b.squaredNorm() << endl;
+	VecCP b_pre(b.rows());
 	matrix_pre.SelfProd(b, b_pre.data());
+	if (mpipre.GetRank() == 0) cout << "Start iterating " << b.squaredNorm() << endl;
+	//b_pre = b;
 	/*J = b_pre;
 	cout << "电流范数" << b_pre.squaredNorm() << endl;
 	return;*/
-	mpiout(b_pre.squaredNorm(), mpipre);
+	//mpiout(b_pre.squaredNorm(), mpipre);
 	//cout << b_pre.squaredNorm() << endl;
 	clock_t start, end;
 	start = clock();
 	J.setZero();
 	JD b_norm = 0, b_send = b_pre.squaredNorm();
 	//cout << mpipre.GetRank() << "Zb_send" << Zb_send << endl;
-	MPI_Reduce(&b_send, &b_norm, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-	MPI_Bcast(&b_norm, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+	MPI_Reduce(&b_send, &b_norm, 1, MPI_JD, MPI_SUM, 0, MPI_COMM_WORLD);
+	MPI_Bcast(&b_norm, 1, MPI_JD, 0, MPI_COMM_WORLD);
 	//cout << mpipre.GetRank() << "Zb_norm" << Zb_norm << endl;
 	b_norm = sqrt(b_norm);
-	size_t restart_num = 1;
-	size_t iterations_max = 120;
+	size_t restart_num = 5;
+	size_t iterations_max = 100;
 	size_t lieshu = J.rows();
-	JD threshold = 2e-3;
-	Eigen::VectorXcd Hk = Eigen::VectorXcd::Zero(iterations_max);
+	JD threshold = 1e-3;
+	VecCP Hk = VecCP::Zero(iterations_max);
 	for (int j = 0; j < restart_num; ++j) {
-		Eigen::VectorXcd r = b_pre;
+		VecCP r = b_pre;
 		if (j > 0) {
 			Prod(J.data(), b_temp.data());
 			r -= b_temp;
 		}
-		Eigen::VectorXcd c = Eigen::VectorXcd::Zero(iterations_max);
-		Eigen::VectorXcd s = Eigen::VectorXcd::Zero(iterations_max);
-		Eigen::VectorXcd e1 = Eigen::VectorXcd::Zero(iterations_max);
-		Eigen::VectorXcd beta = Eigen::VectorXcd::Zero(iterations_max);
-		Eigen::MatrixXcd H = Eigen::MatrixXcd::Zero(iterations_max, iterations_max);
-		Eigen::MatrixXcd V = Eigen::MatrixXcd::Zero(lieshu, iterations_max);
+		VecCP c = VecCP::Zero(iterations_max);
+		VecCP s = VecCP::Zero(iterations_max);
+		VecCP e1 = VecCP::Zero(iterations_max);
+		VecCP beta = VecCP::Zero(iterations_max);
+		MatCP H = MatCP::Zero(iterations_max, iterations_max);
+		MatCP V = MatCP::Zero(lieshu, iterations_max);
 		e1[0] = CP(1.0, 0);
 		JD r_norm = 0, r_send = r.squaredNorm();
-		MPI_Reduce(&r_send, &r_norm, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-		MPI_Bcast(&r_norm, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+		MPI_Reduce(&r_send, &r_norm, 1, MPI_JD, MPI_SUM, 0, MPI_COMM_WORLD);
+		MPI_Bcast(&r_norm, 1, MPI_JD, 0, MPI_COMM_WORLD);
 		r_norm = sqrt(r_norm);
 		JD error = r_norm / b_norm;
 		int number = iterations_max - 2;
@@ -53,14 +55,14 @@ void MLFMM::GmresP(const Eigen::VectorXcd& b, Eigen::VectorXcd& J)
 			for (int i = 0; i <= k; ++i) {
 				Hk(i) = V.col(i).dot(V.col(k + 1));
 			}
-			MPI_Reduce(Hk.data(), H.col(k).data(), (k + 1) * 2, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-			MPI_Bcast(H.col(k).data(), (k + 1) * 2, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+			MPI_Reduce(Hk.data(), H.col(k).data(), (k + 1) * 2, MPI_JD, MPI_SUM, 0, MPI_COMM_WORLD);
+			MPI_Bcast(H.col(k).data(), (k + 1) * 2, MPI_JD, 0, MPI_COMM_WORLD);
 			//cout << mpipre.GetRank() << "???" << endl;
 			V.col(k + 1) -= V.leftCols(k + 1) * H.col(k).segment(0, k + 1);
 
 			JD local_send = V.col(k + 1).squaredNorm(), local_recv = 0.0;
-			MPI_Reduce(&local_send, &local_recv, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-			MPI_Bcast(&local_recv, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+			MPI_Reduce(&local_send, &local_recv, 1, MPI_JD, MPI_SUM, 0, MPI_COMM_WORLD);
+			MPI_Bcast(&local_recv, 1, MPI_JD, 0, MPI_COMM_WORLD);
 			//cout << mpipre.GetRank() << "????" << endl;
 			H(k + 1, k) = sqrt(local_recv);
 			if (abs(H(k + 1, k)) < 1e-10) {
@@ -100,8 +102,10 @@ void MLFMM::GmresP(const Eigen::VectorXcd& b, Eigen::VectorXcd& J)
 		}
 
 		++number;
-		Eigen::MatrixXcd h = H.block(0, 0, number, number);
-		Eigen::VectorXcd y = h.inverse() * beta.topRows(number);
+		MatCP h = H.block(0, 0, number, number);
+		//VecCP y = h.inverse() * beta.topRows(number);
+		Eigen::PartialPivLU<MatCP> lu(h);
+		VecCP y = lu.solve(beta.topRows(number));
 		J += V.leftCols(number) * y;
 		//Prod(J, b_temp.data());
 		//cout << "最终误差 " << (b_temp - b).norm() / b.norm() << endl;

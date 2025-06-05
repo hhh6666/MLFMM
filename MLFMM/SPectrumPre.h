@@ -15,7 +15,7 @@
 typedef Eigen::Triplet<JD> T_;
 
 inline int GetThetaNum(int L) { return L + 1; }
-inline int GetPhiNum(int L) { return (2 * L + 2) % 4 ? (2 * L + 4) : (2 * L + 2); }
+inline int GetPhiNum(int L) { return 2 * L + 2; }
 inline VecJD3 GetK(JD theta, JD phi, JD wavenumber) {
 	JD ct = cos(theta);
 	JD st = sin(theta);

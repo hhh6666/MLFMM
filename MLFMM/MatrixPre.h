@@ -22,17 +22,17 @@ class MatrixPre
 	CP* temp_mem_ptr = nullptr;
 	std::vector<MatCP> near_matrix_list;
 	std::vector<Eigen::PartialPivLU<MatCP >> Zinv_list;
+	std::vector<MatCP> self_matrix;
 	const int send_buffer_size = 1;
 	const int recv_buffer_size = 1;
 	void GetTransfers();
-	void GetDecomposes();
 	void MemPre();
 	void GetNearNb();
 	void GetAggregations();
 	void GetInterpolations();
 	void GetPhaseShifts();
 	void StartTransfer(const int level);
-	inline void hhc(int level, CP* sptm_ptr) {
+	/*inline void hhc(int level, CP* sptm_ptr) {
 		VecCP e = VecCP3::Zero();
 		auto& thetas = spectrum_pre.thetas[level];
 		int phi_num = spectrum_pre.phis_num[level];
@@ -56,7 +56,7 @@ class MatrixPre
 		}
 		VecJD3 pos = octree.mortoncode3d.GetPoint(cube.mtc, level);
 		std::cout << pos.transpose() << " " << CP(0.0, -Zf * GlobalParams.k0 / (4.0 * pi)) * e.transpose() << std::endl;
-	}
+	}*/
 	
 
 public:
@@ -67,7 +67,6 @@ public:
 		this->GetInterpolations();
 		this->GetPhaseShifts();
 		this->GetAggregations();
-		this->GetDecomposes();
 		this->GetTransfers();
 		this->GetNearNb();
 	}
@@ -78,8 +77,8 @@ public:
 	OctreeRWG& octree;
 	SpectrumPre& spectrum_pre;
 	const int GetRwgNum() { return octree.local_rwgs_num(); }
-	Eigen::Vector2cd GetRwgEFarField(const JD theta, const JD phi, const Eigen::VectorXcd& J);
-	Eigen::Vector3cd GetRwgENearField(const VecJD3 r, const Eigen::VectorXcd& J);
+	Eigen::Vector<CP, 2> GetRwgEFarField(const JD theta, const JD phi, const VecCP& J);
+	VecCP3 GetRwgENearField(const VecJD3 r, const VecCP& J);
 	inline std::vector<int> rwg_index_cube(int level) {
 		std::set<int> ttt;
 		auto& cubes = octree.GetCubesLevel(level);

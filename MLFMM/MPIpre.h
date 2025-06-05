@@ -5,6 +5,11 @@
 #include <iostream>
 #include <vector>
 
+//const int MPI_JD_C = MPI_DOUBLE_COMPLEX;
+//const int MPI_JD = MPI_DOUBLE;
+const int MPI_JD_C = MPI_COMPLEX;
+const int MPI_JD = MPI_FLOAT;
+
 struct CommObj
 {
 	int rank_exchange = MPI_PROC_NULL;
@@ -79,11 +84,6 @@ public:
 	int GetRank()const{return rank;}
 };
 
-inline double mpiout(double sum, MPIpre& mpipre) {
-	double my_norm = sum;
-	double sum_level_all = 0;
-	MPI_Reduce(&my_norm, &sum_level_all, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-	return sum_level_all;
-}
+
 
 #endif

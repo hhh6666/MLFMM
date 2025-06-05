@@ -10,6 +10,9 @@
 #include "RWGpre.h"
 #include <set>
 
+using std::cout;
+using std::endl;
+
 struct NearProxyCube
 {
 	size_t mtc;
@@ -80,27 +83,28 @@ class MortonCode3D
 public:
 	MortonCode3D() = default;
 	MortonCode3D(VecJD3 start_point, VecJD3 end_point, JD length) {
-		this->centre = (start_point + end_point) / 2;
+		this->centre = (start_point + end_point) * JD(0.5);
 		int a = get_level_num(length, (end_point - start_point)[0]);
 		int b = get_level_num(length, (end_point - start_point)[1]);
 		int c = get_level_num(length, (end_point - start_point)[2]);
 		mortoncode1d[0].level_num = a;
 		mortoncode1d[1].level_num = b;
 		mortoncode1d[2].level_num = c;
-		start_point = centre - (VecJD3{ JD(1 << a),JD(1 << b),JD(1 << c) } *length) / 2;
-		end_point = centre + (VecJD3{ JD(1 << a),JD(1 << b),JD(1 << c) } *length) / 2;
+		start_point = centre - (VecJD3{ JD(1 << a),JD(1 << b),JD(1 << c) } *length) * JD(0.5);
+		end_point = centre + (VecJD3{ JD(1 << a),JD(1 << b),JD(1 << c) } *length) * JD(0.5);
 		mortoncode1d[0].set_length(length).set_start_point(start_point[0], end_point[0]);
 		mortoncode1d[1].set_length(length).set_start_point(start_point[1], end_point[1]);
 		mortoncode1d[2].set_length(length).set_start_point(start_point[2], end_point[2]);
-		near_length_max.resize(level_num);
+		//cout << centre.transpose() << endl;
+		/*near_length_max.resize(level_num);
 		next_near_length_max.resize(level_num);
 		for (int i = 0; i < level_num; ++i) {
-			near_length_max[i] = length * (1 << i) * sqrt(3.0) + 1e-6;
-			next_near_length_max[i] = 3.0 * length * (1 << i) * sqrt(3.0) + 1e-6;
-		}
+			near_length_max[i] = length * (1 << i) * sqrt(3.0) + min_eps;
+			next_near_length_max[i] = 3.0 * length * (1 << i) * sqrt(3.0) +min_eps;
+		}*/
 	}
-	std::vector<JD> near_length_max;
-	std::vector<JD> next_near_length_max;
+	/*std::vector<JD> near_length_max;
+	std::vector<JD> next_near_length_max;*/
 	VecJD3 GetPoint(size_t morton_code, int level_index) const;
 	VecJD3 GetGap(size_t morton_code_gap, int level_index) const;
 	VecJD3 GetGap2(size_t mtc1, size_t mtc2, int level_index) const;
@@ -113,6 +117,7 @@ class OctreeRWG
 {
 	void Greedy(std::vector<Cube>& cubes_level_old, std::vector<CubeWieght>& cube_weights, std::vector<Cube>& cubes_level_new
 		, int level_index);
+	const JD length;
 protected:
 	std::vector<std::vector<Cube> > cubes;//本地盒子
 	std::vector<std::vector<ProxyCube> > proxy_cubes;//代理盒子（用于次近邻）
@@ -129,12 +134,13 @@ protected:
 public:
 	OctreeRWG() = default;
 	OctreeRWG(RWG* old_rwg_ptr, JD length, MPIpre& mpipre)
-		:old_rwg_ptr(old_rwg_ptr), mortoncode3d(old_rwg_ptr->start_point, old_rwg_ptr->end_point, length), mpipre(mpipre)
+		:old_rwg_ptr(old_rwg_ptr), mortoncode3d(old_rwg_ptr->start_point, old_rwg_ptr->end_point, length), mpipre(mpipre),length(length)
 	{
 		this->Fillcubes();
+		//for (int i = 0; i < 10; i++) i--;
 		this->GetNear();
 		this->change_rwgs();
-		
+		//for (int i = 0; i < 10; i++) i--;
 		rwg.initial();
 	};
 	std::vector<int> actual_L;
@@ -157,6 +163,11 @@ public:
 	const int local_rwgs_num()const { return cube_rwgs_dif[cubes[0].size()]; }
 };
 
-
+inline JD mpiout(JD sum, MPIpre& mpipre) {
+	JD my_norm = sum;
+	JD sum_level_all = 0;
+	MPI_Reduce(&my_norm, &sum_level_all, 1, MPI_JD, MPI_SUM, 0, MPI_COMM_WORLD);
+	return sum_level_all;
+}
 
 #endif // OCTREE_H

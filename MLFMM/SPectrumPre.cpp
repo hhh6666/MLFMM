@@ -17,12 +17,14 @@ void SpectrumPre::Get_Spectrum()
 	ip_thetas_end.reserve(level_num - 1);
 	for (int i = 0; i < level_num; ++i) {
 		//int L = GetL(length * JD(1 << i) * sqrt(3.0), GlobalParams.k0);
+		//if (mpipre.GetRank() == 0) cout << "??" << endl;
 		int L = actual_L[i];
 		int theta_num = GetThetaNum(L);//1.5, 
 		int phi_num = GetPhiNum(L);
-
+		//if (mpipre.GetRank() == 0) cout << "L数量" << L << endl;
 		vector<JD> thetas_level(theta_num);
 		LegendrePolynomial LP(theta_num);
+		//if (mpipre.GetRank() == 0) cout << "???" << endl;
 		for (int i = 0; i < theta_num; i++) {
 			thetas_level[i] = acos(-LP.root(theta_num - i));
 		}
@@ -138,7 +140,7 @@ void TWIP::GetMatrix(int fa_theta_st, int fa_theta_end, int son_theta_st, int so
 
 	for (int i = u_theta_st; i < u_theta_end; i++) {
 		JD theta = fa_thetas[i];
-		int m0 = std::lower_bound(son_thetas.begin(), son_thetas.end(), theta + 1e-7) - son_thetas.begin() - 1;//第一个大于等于theta的元素的下标
+		int m0 = std::lower_bound(son_thetas.begin(), son_thetas.end(), theta + min_eps) - son_thetas.begin() - 1;//第一个大于等于theta的元素的下标
 		for (int j = 0; j < son_phi_num; j++) {
 			int fa_index = (i - u_theta_st) * son_phi_num + j;
 			int mbegin = son_theta_st ? max(m0 - p + 1, d_theta_st) : m0 - p + 1, mend = son_theta_end < int(son_thetas.size()) ? min(m0 + p, d_theta_end - 1) : m0 + p;
@@ -176,19 +178,4 @@ void TWIP::GetMatrix(int fa_theta_st, int fa_theta_end, int son_theta_st, int so
 	}
 	First.setFromTriplets(CList_F.begin(), CList_F.end());
 	Second.setFromTriplets(CList_S.begin(), CList_S.end());
-
-	/*int son_shift = son_theta_st ? p * son_phi_num : 0;
-	int fa_shift = fa_theta_st ? pp * fa_phi_num : 0;
-	int actual_fa_spectrum_num = (fa_theta_end - fa_theta_st) * fa_phi_num;
-	int actual_temp_spectrum_num = (fa_theta_end - fa_theta_st) * son_phi_num;
-	int actual_son_spectrum_num = (son_theta_end - son_theta_st) * son_phi_num;
-	Fu = First.middleRows(fa_shift, actual_temp_spectrum_num).leftCols(p * son_phi_num);
-	Fm = First.middleRows(fa_shift, actual_temp_spectrum_num).middleCols(son_shift, actual_son_spectrum_num);
-	Fd = First.middleRows(fa_shift, actual_temp_spectrum_num).rightCols(p * son_phi_num);
-	S = Second.block(fa_shift, fa_shift, actual_fa_spectrum_num, actual_temp_spectrum_num);
-
-	aFu = First.transpose().middleRows(son_shift, actual_son_spectrum_num).leftCols(pp * fa_phi_num);
-	aFm = First.transpose().middleRows(son_shift, actual_son_spectrum_num).middleCols(fa_shift, actual_fa_spectrum_num);
-	aFd = First.transpose().middleRows(son_shift, actual_son_spectrum_num).rightCols(pp * fa_phi_num);
-	aS = Second.transpose();*/
 }
